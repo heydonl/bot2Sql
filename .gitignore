@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Frontend (managed by submodule) ###
+# Note: frontend/ directory is managed as a git submodule
+# Do NOT add frontend/ to .gitignore
+# The submodule configuration is in .gitmodules

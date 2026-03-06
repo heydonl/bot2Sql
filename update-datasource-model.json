@@ -1,0 +1,4 @@
+{
+  "displayName": "数据源",
+  "description": "存储数据库连接配置信息，包括MySQL、PostgreSQL等数据源"
+}

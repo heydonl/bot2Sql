@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.ModelMapper">
+
+    <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.Model">
+        <id column="id" property="id"/>
+        <result column="datasource_id" property="datasourceId"/>
+        <result column="table_name" property="tableName"/>
+        <result column="display_name" property="displayName"/>
+        <result column="description" property="description"/>
+        <result column="is_visible" property="isVisible"/>
+        <result column="primary_key" property="primaryKey"/>
+        <result column="properties" property="properties"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.Model"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO model (datasource_id, table_name, display_name, description, is_visible, primary_key, properties)
+        VALUES (#{datasourceId}, #{tableName}, #{displayName}, #{description}, #{isVisible}, #{primaryKey}, #{properties})
+    </insert>
+
+    <delete id="deleteById">
+        DELETE FROM model WHERE id = #{id}
+    </delete>
+
+    <update id="update" parameterType="com.tecdo.mac.sql2bot.domain.Model">
+        UPDATE model
+        SET datasource_id = #{datasourceId},
+            table_name = #{tableName},
+            display_name = #{displayName},
+            description = #{description},
+            is_visible = #{isVisible},
+            primary_key = #{primaryKey},
+            properties = #{properties}
+        WHERE id = #{id}
+    </update>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM model WHERE id = #{id}
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT * FROM model ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByDatasourceId" resultMap="BaseResultMap">
+        SELECT * FROM model WHERE datasource_id = #{datasourceId} ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByDatasourceIdAndTableName" resultMap="BaseResultMap">
+        SELECT * FROM model WHERE datasource_id = #{datasourceId} AND table_name = #{tableName}
+    </select>
+
+    <select id="selectVisible" resultMap="BaseResultMap">
+        SELECT * FROM model WHERE is_visible = true ORDER BY created_at DESC
+    </select>
+
+</mapper>

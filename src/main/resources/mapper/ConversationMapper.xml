@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.ConversationMapper">
+
+    <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.Conversation">
+        <id column="id" property="id"/>
+        <result column="user_id" property="userId"/>
+        <result column="title" property="title"/>
+        <result column="datasource_id" property="datasourceId"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.Conversation"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO conversation (user_id, title, datasource_id)
+        VALUES (#{userId}, #{title}, #{datasourceId})
+    </insert>
+
+    <delete id="deleteById">
+        DELETE FROM conversation WHERE id = #{id}
+    </delete>
+
+    <update id="update" parameterType="com.tecdo.mac.sql2bot.domain.Conversation">
+        UPDATE conversation
+        SET user_id = #{userId},
+            title = #{title},
+            datasource_id = #{datasourceId}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateTitle">
+        UPDATE conversation SET title = #{title} WHERE id = #{id}
+    </update>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM conversation WHERE id = #{id}
+    </select>
+
+    <select id="selectByUserId" resultMap="BaseResultMap">
+        SELECT * FROM conversation WHERE user_id = #{userId} ORDER BY updated_at DESC
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT * FROM conversation ORDER BY updated_at DESC
+    </select>
+
+</mapper>

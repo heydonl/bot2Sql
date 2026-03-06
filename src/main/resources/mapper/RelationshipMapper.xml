@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.RelationshipMapper">
+
+    <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.Relationship">
+        <id column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="from_model_id" property="fromModelId"/>
+        <result column="to_model_id" property="toModelId"/>
+        <result column="join_type" property="joinType"/>
+        <result column="join_condition" property="joinCondition"/>
+        <result column="description" property="description"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.Relationship"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO relationship (name, from_model_id, to_model_id, join_type, join_condition, description)
+        VALUES (#{name}, #{fromModelId}, #{toModelId}, #{joinType}, #{joinCondition}, #{description})
+    </insert>
+
+    <delete id="deleteById">
+        DELETE FROM relationship WHERE id = #{id}
+    </delete>
+
+    <update id="update" parameterType="com.tecdo.mac.sql2bot.domain.Relationship">
+        UPDATE relationship
+        SET name = #{name},
+            from_model_id = #{fromModelId},
+            to_model_id = #{toModelId},
+            join_type = #{joinType},
+            join_condition = #{joinCondition},
+            description = #{description}
+        WHERE id = #{id}
+    </update>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM relationship WHERE id = #{id}
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT * FROM relationship ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByFromModelId" resultMap="BaseResultMap">
+        SELECT * FROM relationship WHERE from_model_id = #{fromModelId} ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByToModelId" resultMap="BaseResultMap">
+        SELECT * FROM relationship WHERE to_model_id = #{toModelId} ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByModelId" resultMap="BaseResultMap">
+        SELECT * FROM relationship
+        WHERE from_model_id = #{modelId} OR to_model_id = #{modelId}
+        ORDER BY created_at DESC
+    </select>
+
+</mapper>

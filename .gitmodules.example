@@ -1,0 +1,9 @@
+# Git Submodule 配置示例
+#
+# 这个文件展示了如何配置前端项目作为 submodule
+# 实际使用时，通过 git submodule add 命令自动生成
+
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/your-org/sql2bot-frontend.git
+	branch = main
