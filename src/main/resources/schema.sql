@@ -137,3 +137,36 @@ CREATE TABLE IF NOT EXISTS message (
     INDEX idx_role (role),
     INDEX idx_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话消息表';
+
+-- 9. 提示词模板
+CREATE TABLE IF NOT EXISTS prompt_template (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+    name VARCHAR(100) NOT NULL COMMENT '模板名称',
+    description TEXT COMMENT '模板描述',
+    template TEXT NOT NULL COMMENT '提示词模板内容',
+    category VARCHAR(50) DEFAULT 'user' COMMENT '分类: system(系统), user(用户), example(示例)',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+    priority INT DEFAULT 0 COMMENT '优先级，数字越大优先级越高',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_category (category),
+    INDEX idx_active (is_active),
+    INDEX idx_priority (priority)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='提示词模板表';
+
+-- 10. 术语库
+CREATE TABLE IF NOT EXISTS glossary (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+    term VARCHAR(100) NOT NULL COMMENT '术语',
+    definition TEXT NOT NULL COMMENT '定义',
+    synonyms TEXT COMMENT '同义词(JSON数组)',
+    category VARCHAR(50) COMMENT '分类',
+    examples TEXT COMMENT '使用示例',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_term (term),
+    INDEX idx_category (category),
+    INDEX idx_active (is_active),
+    FULLTEXT INDEX ft_term_definition (term, definition)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='术语库表';
