@@ -45,6 +45,11 @@ public class Relationship {
     private String description;
 
     /**
+     * 工作区ID
+     */
+    private Long workspaceId;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createdAt;

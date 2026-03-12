@@ -2,6 +2,7 @@ package com.tecdo.mac.sql2bot.controller;
 
 import com.tecdo.mac.sql2bot.common.Result;
 import com.tecdo.mac.sql2bot.domain.Model;
+import com.tecdo.mac.sql2bot.dto.ModelWithColumnsDTO;
 import com.tecdo.mac.sql2bot.service.ModelService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,20 @@ public class ModelController {
             return Result.success(list);
         } catch (Exception e) {
             log.error("Failed to list models", e);
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 查询所有模型及其字段（用于可视化关系配置）
+     */
+    @GetMapping("/with-columns")
+    public Result<List<ModelWithColumnsDTO>> listAllWithColumns() {
+        try {
+            List<ModelWithColumnsDTO> list = modelService.listAllWithColumns();
+            return Result.success(list);
+        } catch (Exception e) {
+            log.error("Failed to list models with columns", e);
             return Result.error(e.getMessage());
         }
     }

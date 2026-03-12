@@ -11,14 +11,15 @@
         <result column="join_type" property="joinType"/>
         <result column="join_condition" property="joinCondition"/>
         <result column="description" property="description"/>
+        <result column="workspace_id" property="workspaceId"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
     <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.Relationship"
             useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO relationship (name, from_model_id, to_model_id, join_type, join_condition, description)
-        VALUES (#{name}, #{fromModelId}, #{toModelId}, #{joinType}, #{joinCondition}, #{description})
+        INSERT INTO relationship (name, from_model_id, to_model_id, join_type, join_condition, description, workspace_id)
+        VALUES (#{name}, #{fromModelId}, #{toModelId}, #{joinType}, #{joinCondition}, #{description}, #{workspaceId})
     </insert>
 
     <delete id="deleteById">
@@ -32,7 +33,8 @@
             to_model_id = #{toModelId},
             join_type = #{joinType},
             join_condition = #{joinCondition},
-            description = #{description}
+            description = #{description},
+            workspace_id = #{workspaceId}
         WHERE id = #{id}
     </update>
 
@@ -56,6 +58,10 @@
         SELECT * FROM relationship
         WHERE from_model_id = #{modelId} OR to_model_id = #{modelId}
         ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByWorkspaceId" resultMap="BaseResultMap">
+        SELECT * FROM relationship WHERE workspace_id = #{workspaceId} ORDER BY created_at DESC
     </select>
 
 </mapper>

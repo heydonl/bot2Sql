@@ -6,6 +6,7 @@
     <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.Model">
         <id column="id" property="id"/>
         <result column="datasource_id" property="datasourceId"/>
+        <result column="database_id" property="databaseId"/>
         <result column="table_name" property="tableName"/>
         <result column="display_name" property="displayName"/>
         <result column="description" property="description"/>
@@ -18,8 +19,16 @@
 
     <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.Model"
             useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO model (datasource_id, table_name, display_name, description, is_visible, primary_key, properties)
-        VALUES (#{datasourceId}, #{tableName}, #{displayName}, #{description}, #{isVisible}, #{primaryKey}, #{properties})
+        INSERT INTO model (datasource_id, database_id, table_name, display_name, description, is_visible, primary_key, properties)
+        VALUES (#{datasourceId}, #{databaseId}, #{tableName}, #{displayName}, #{description}, #{isVisible}, #{primaryKey}, #{properties})
+    </insert>
+
+    <insert id="batchInsert" parameterType="java.util.List" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO model (datasource_id, database_id, table_name, display_name, description, is_visible, primary_key, properties)
+        VALUES
+        <foreach collection="models" item="item" separator=",">
+            (#{item.datasourceId}, #{item.databaseId}, #{item.tableName}, #{item.displayName}, #{item.description}, #{item.isVisible}, #{item.primaryKey}, #{item.properties})
+        </foreach>
     </insert>
 
     <delete id="deleteById">
@@ -29,6 +38,7 @@
     <update id="update" parameterType="com.tecdo.mac.sql2bot.domain.Model">
         UPDATE model
         SET datasource_id = #{datasourceId},
+            database_id = #{databaseId},
             table_name = #{tableName},
             display_name = #{displayName},
             description = #{description},

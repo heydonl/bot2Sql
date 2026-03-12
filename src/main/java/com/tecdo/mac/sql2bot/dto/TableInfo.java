@@ -10,6 +10,11 @@ import java.util.List;
 public class TableInfo {
 
     /**
+     * 数据库名
+     */
+    private String databaseName;
+
+    /**
      * 表名
      */
     private String tableName;

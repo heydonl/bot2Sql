@@ -52,6 +52,13 @@ public class RelationshipService {
     }
 
     /**
+     * 根据工作区ID查询关系
+     */
+    public List<Relationship> listByWorkspaceId(Long workspaceId) {
+        return relationshipMapper.selectByWorkspaceId(workspaceId);
+    }
+
+    /**
      * 更新关系
      */
     @Transactional

@@ -51,4 +51,9 @@ public interface RelationshipMapper {
      * 根据模型ID查询所有相关关系（作为源或目标）
      */
     List<Relationship> selectByModelId(@Param("modelId") Long modelId);
+
+    /**
+     * 根据工作区ID查询关系
+     */
+    List<Relationship> selectByWorkspaceId(@Param("workspaceId") Long workspaceId);
 }

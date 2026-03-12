@@ -18,6 +18,11 @@ public interface ModelMapper {
     int insert(Model model);
 
     /**
+     * 批量插入模型
+     */
+    int batchInsert(@Param("models") List<Model> models);
+
+    /**
      * 根据ID删除
      */
     int deleteById(@Param("id") Long id);

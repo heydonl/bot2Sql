@@ -3,6 +3,7 @@ package com.tecdo.mac.sql2bot.controller;
 import com.tecdo.mac.sql2bot.common.Result;
 import com.tecdo.mac.sql2bot.domain.DataSource;
 import com.tecdo.mac.sql2bot.dto.ImportResult;
+import com.tecdo.mac.sql2bot.dto.TableImportRequest;
 import com.tecdo.mac.sql2bot.dto.TableInfo;
 import com.tecdo.mac.sql2bot.service.DataSourceService;
 import com.tecdo.mac.sql2bot.service.SchemaDiscoveryService;
@@ -113,6 +114,20 @@ public class DataSourceController {
     }
 
     /**
+     * 列出数据源下的所有数据库
+     */
+    @GetMapping("/{id}/databases")
+    public Result<List<String>> listDatabases(@PathVariable Long id) {
+        try {
+            List<String> databases = schemaDiscoveryService.listDatabases(id);
+            return Result.success(databases);
+        } catch (Exception e) {
+            log.error("Failed to list databases", e);
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
      * 发现数据源中的所有表结构
      */
     @GetMapping("/{id}/discover")
@@ -127,13 +142,28 @@ public class DataSourceController {
     }
 
     /**
+     * 从指定的多个数据库中发现表结构
+     */
+    @PostMapping("/{id}/discover-from-databases")
+    public Result<List<TableInfo>> discoverTablesFromDatabases(@PathVariable Long id,
+                                                                 @RequestBody List<String> databaseNames) {
+        try {
+            List<TableInfo> tables = schemaDiscoveryService.discoverTablesFromDatabases(id, databaseNames);
+            return Result.success(tables);
+        } catch (Exception e) {
+            log.error("Failed to discover tables from databases", e);
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
      * 导入表结构到语义模型
      */
     @PostMapping("/{id}/import")
     public Result<ImportResult> importTables(@PathVariable Long id,
-                                              @RequestBody(required = false) List<String> tableNames) {
+                                              @RequestBody(required = false) List<TableImportRequest> tables) {
         try {
-            ImportResult result = schemaDiscoveryService.importTables(id, tableNames);
+            ImportResult result = schemaDiscoveryService.importTablesWithDatabase(id, tables);
             return Result.success(result);
         } catch (Exception e) {
             log.error("Failed to import tables", e);

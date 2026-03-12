@@ -63,6 +63,20 @@ public class RelationshipController {
     }
 
     /**
+     * 根据工作区ID查询关系
+     */
+    @GetMapping("/workspace/{workspaceId}")
+    public Result<List<Relationship>> listByWorkspaceId(@PathVariable Long workspaceId) {
+        try {
+            List<Relationship> list = relationshipService.listByWorkspaceId(workspaceId);
+            return Result.success(list);
+        } catch (Exception e) {
+            log.error("Failed to list relationships by workspace", e);
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
      * 根据ID查询关系
      */
     @GetMapping("/{id}")
@@ -83,11 +97,13 @@ public class RelationshipController {
      * 更新关系
      */
     @PutMapping("/{id}")
-    public Result<Void> update(@PathVariable Long id, @RequestBody Relationship relationship) {
+    public Result<Relationship> update(@PathVariable Long id, @RequestBody Relationship relationship) {
         try {
             relationship.setId(id);
             relationshipService.update(relationship);
-            return Result.success();
+            // 返回更新后的关系数据
+            Relationship updated = relationshipService.getById(id);
+            return Result.success(updated);
         } catch (Exception e) {
             log.error("Failed to update relationship", e);
             return Result.error(e.getMessage());

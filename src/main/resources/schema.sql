@@ -19,10 +19,25 @@ CREATE TABLE IF NOT EXISTS datasource (
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='数据源配置表';
 
+-- 1.5 数据库表
+CREATE TABLE IF NOT EXISTS `database` (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+    datasource_id BIGINT NOT NULL COMMENT '数据源ID',
+    database_name VARCHAR(100) NOT NULL COMMENT '数据库名',
+    display_name VARCHAR(100) COMMENT '显示名称',
+    description TEXT COMMENT '描述',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    FOREIGN KEY (datasource_id) REFERENCES datasource(id) ON DELETE CASCADE,
+    UNIQUE KEY uk_datasource_database (datasource_id, database_name),
+    INDEX idx_datasource (datasource_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='数据库表';
+
 -- 2. 表模型
 CREATE TABLE IF NOT EXISTS model (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
     datasource_id BIGINT NOT NULL COMMENT '数据源ID',
+    database_id BIGINT COMMENT '数据库ID',
     table_name VARCHAR(100) NOT NULL COMMENT '物理表名',
     display_name VARCHAR(100) COMMENT '显示名称',
     description TEXT COMMENT '业务描述',
@@ -32,8 +47,10 @@ CREATE TABLE IF NOT EXISTS model (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     FOREIGN KEY (datasource_id) REFERENCES datasource(id) ON DELETE CASCADE,
-    UNIQUE KEY uk_datasource_table (datasource_id, table_name),
+    FOREIGN KEY (database_id) REFERENCES `database`(id) ON DELETE SET NULL,
+    UNIQUE KEY uk_database_table (database_id, table_name),
     INDEX idx_datasource (datasource_id),
+    INDEX idx_database (database_id),
     INDEX idx_visible (is_visible)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表模型定义';
 
@@ -170,3 +187,18 @@ CREATE TABLE IF NOT EXISTS glossary (
     INDEX idx_active (is_active),
     FULLTEXT INDEX ft_term_definition (term, definition)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='术语库表';
+
+-- 11. 工作区表
+CREATE TABLE workspace (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL COMMENT '工作区名称',
+    description TEXT COMMENT '工作区描述',
+    priority INT DEFAULT 0 COMMENT '优先级，数值越大优先级越高',
+    layout_data TEXT COMMENT '工作区布局数据(JSON格式)',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_name (name),
+    INDEX idx_priority (priority),
+    INDEX idx_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工作区表';

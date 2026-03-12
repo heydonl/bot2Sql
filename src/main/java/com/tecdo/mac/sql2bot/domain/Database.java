@@ -4,10 +4,10 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 表模型实体
+ * 数据库实体
  */
 @Data
-public class Model {
+public class Database {
 
     /**
      * 主键ID
@@ -20,14 +20,9 @@ public class Model {
     private Long datasourceId;
 
     /**
-     * 数据库ID
+     * 数据库名
      */
-    private Long databaseId;
-
-    /**
-     * 物理表名
-     */
-    private String tableName;
+    private String databaseName;
 
     /**
      * 显示名称
@@ -35,24 +30,9 @@ public class Model {
     private String displayName;
 
     /**
-     * 业务描述
+     * 描述
      */
     private String description;
-
-    /**
-     * 是否对查询开放
-     */
-    private Boolean isVisible;
-
-    /**
-     * 主键字段名
-     */
-    private String primaryKey;
-
-    /**
-     * 额外属性(JSON格式)
-     */
-    private String properties;
 
     /**
      * 创建时间
