@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.QueryTemplateMapper">
+
+    <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.QueryTemplate">
+        <id column="id" property="id"/>
+        <result column="skeleton" property="skeleton"/>
+        <result column="sql_template" property="sqlTemplate"/>
+        <result column="entity" property="entity"/>
+        <result column="intent" property="intent"/>
+        <result column="supported_dimensions" property="supportedDimensions"/>
+        <result column="supported_metrics" property="supportedMetrics"/>
+        <result column="parameters" property="parameters"/>
+        <result column="example_question" property="exampleQuestion"/>
+        <result column="example_intent_json" property="exampleIntentJson"/>
+        <result column="score" property="score"/>
+        <result column="rating_count" property="ratingCount"/>
+        <result column="usage_count" property="usageCount"/>
+        <result column="datasource_id" property="datasourceId"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.QueryTemplate"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO query_template (
+            skeleton, sql_template, entity, intent,
+            supported_dimensions, supported_metrics, parameters,
+            example_question, example_intent_json,
+            score, rating_count, usage_count, datasource_id
+        ) VALUES (
+            #{skeleton}, #{sqlTemplate}, #{entity}, #{intent},
+            #{supportedDimensions}, #{supportedMetrics}, #{parameters},
+            #{exampleQuestion}, #{exampleIntentJson},
+            #{score}, #{ratingCount}, #{usageCount}, #{datasourceId}
+        )
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM query_template WHERE id = #{id}
+    </select>
+
+    <select id="selectBySkeleton" resultMap="BaseResultMap">
+        SELECT * FROM query_template WHERE skeleton = #{skeleton}
+    </select>
+
+    <select id="selectList" resultMap="BaseResultMap">
+        SELECT * FROM query_template
+        <where>
+            <if test="intent != null and intent != ''">
+                AND intent = #{intent}
+            </if>
+            <if test="entity != null and entity != ''">
+                AND entity = #{entity}
+            </if>
+        </where>
+        ORDER BY score DESC, usage_count DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="count" resultType="int">
+        SELECT COUNT(*) FROM query_template
+        <where>
+            <if test="intent != null and intent != ''">
+                AND intent = #{intent}
+            </if>
+            <if test="entity != null and entity != ''">
+                AND entity = #{entity}
+            </if>
+        </where>
+    </select>
+
+    <update id="updateRating">
+        UPDATE query_template
+        SET score = (score * rating_count + #{newScore}) / (rating_count + 1),
+            rating_count = rating_count + 1
+        WHERE id = #{id}
+    </update>
+
+    <update id="incrementUsageCount">
+        UPDATE query_template
+        SET usage_count = usage_count + 1
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM query_template WHERE id = #{id}
+    </delete>
+
+    <select id="getStats" resultType="com.tecdo.mac.sql2bot.mapper.QueryTemplateMapper$QueryTemplateStats">
+        SELECT
+            COUNT(*) as totalTemplates,
+            AVG(score) as averageScore,
+            SUM(usage_count) as totalUsageCount,
+            SUM(rating_count) as totalRatingCount
+        FROM query_template
+    </select>
+
+</mapper>
