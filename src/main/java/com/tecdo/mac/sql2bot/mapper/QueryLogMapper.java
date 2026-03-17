@@ -46,4 +46,6 @@ public interface QueryLogMapper {
         @Param("startDate") String startDate,
         @Param("endDate") String endDate
     );
+
+    com.tecdo.mac.sql2bot.dto.QueryLogStats getStats();
 }

@@ -123,4 +123,18 @@
         ORDER BY count DESC
     </select>
 
+    <select id="getStats" resultType="com.tecdo.mac.sql2bot.dto.QueryLogStats">
+        SELECT
+            COUNT(*) as totalQueries,
+            SUM(CASE WHEN execution_success = TRUE THEN 1 ELSE 0 END) as successQueries,
+            SUM(CASE WHEN execution_success = FALSE THEN 1 ELSE 0 END) as failedQueries,
+            SUM(CASE WHEN is_from_template = TRUE THEN 1 ELSE 0 END) as templateUsageCount,
+            SUM(CASE WHEN is_from_template = FALSE THEN 1 ELSE 0 END) as llmGenerationCount,
+            AVG(execution_time) as averageExecutionTime,
+            AVG(rating) as averageRating,
+            SUM(CASE WHEN is_labeled = TRUE THEN 1 ELSE 0 END) as labeledCount,
+            SUM(CASE WHEN is_labeled = FALSE OR is_labeled IS NULL THEN 1 ELSE 0 END) as unlabeledCount
+        FROM query_log
+    </select>
+
 </mapper>
