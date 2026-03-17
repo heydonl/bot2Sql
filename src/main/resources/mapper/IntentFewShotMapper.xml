@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.IntentFewShotMapper">
+
+    <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.IntentFewShot">
+        <id column="id" property="id"/>
+        <result column="intent" property="intent"/>
+        <result column="question" property="question"/>
+        <result column="intent_json" property="intentJson"/>
+        <result column="skeleton" property="skeleton"/>
+        <result column="is_active" property="isActive"/>
+        <result column="datasource_id" property="datasourceId"/>
+        <result column="created_by" property="createdBy"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.IntentFewShot"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO intent_few_shot (
+            intent, question, intent_json, skeleton,
+            is_active, datasource_id, created_by
+        ) VALUES (
+            #{intent}, #{question}, #{intentJson}, #{skeleton},
+            #{isActive}, #{datasourceId}, #{createdBy}
+        )
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM intent_few_shot WHERE id = #{id}
+    </select>
+
+    <select id="selectActiveExamples" resultMap="BaseResultMap">
+        SELECT * FROM intent_few_shot WHERE is_active = TRUE
+        ORDER BY created_at DESC
+    </select>
+
+    <select id="selectByIntent" resultMap="BaseResultMap">
+        SELECT * FROM intent_few_shot
+        WHERE intent = #{intent} AND is_active = TRUE
+        ORDER BY created_at DESC
+    </select>
+
+    <select id="selectList" resultMap="BaseResultMap">
+        SELECT * FROM intent_few_shot
+        <where>
+            <if test="intent != null and intent != ''">
+                AND intent = #{intent}
+            </if>
+            <if test="activeOnly != null and activeOnly == true">
+                AND is_active = TRUE
+            </if>
+        </where>
+        ORDER BY created_at DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <update id="update" parameterType="com.tecdo.mac.sql2bot.domain.IntentFewShot">
+        UPDATE intent_few_shot
+        SET intent = #{intent},
+            question = #{question},
+            intent_json = #{intentJson},
+            skeleton = #{skeleton},
+            is_active = #{isActive}
+        WHERE id = #{id}
+    </update>
+
+    <update id="toggleActive">
+        UPDATE intent_few_shot
+        SET is_active = NOT is_active
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM intent_few_shot WHERE id = #{id}
+    </delete>
+
+</mapper>

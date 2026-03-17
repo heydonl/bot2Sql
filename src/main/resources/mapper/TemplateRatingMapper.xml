@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.TemplateRatingMapper">
+
+    <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.TemplateRating">
+        <id column="id" property="id"/>
+        <result column="template_id" property="templateId"/>
+        <result column="user_id" property="userId"/>
+        <result column="score" property="score"/>
+        <result column="conversation_id" property="conversationId"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.TemplateRating"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO template_rating (template_id, user_id, score, conversation_id)
+        VALUES (#{templateId}, #{userId}, #{score}, #{conversationId})
+        ON DUPLICATE KEY UPDATE score = #{score}
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM template_rating WHERE id = #{id}
+    </select>
+
+    <select id="selectByTemplateAndUser" resultMap="BaseResultMap">
+        SELECT * FROM template_rating
+        WHERE template_id = #{templateId} AND user_id = #{userId}
+    </select>
+
+    <update id="updateScore">
+        UPDATE template_rating
+        SET score = #{score}
+        WHERE template_id = #{templateId} AND user_id = #{userId}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM template_rating WHERE id = #{id}
+    </delete>
+
+</mapper>
