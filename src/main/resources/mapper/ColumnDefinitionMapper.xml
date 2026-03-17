@@ -64,4 +64,8 @@
         SELECT * FROM column_definition WHERE model_id = #{modelId} AND column_type = #{columnType} ORDER BY id
     </select>
 
+    <select id="selectByColumnName" resultMap="BaseResultMap">
+        SELECT * FROM column_definition WHERE column_name = #{columnName}
+    </select>
+
 </mapper>

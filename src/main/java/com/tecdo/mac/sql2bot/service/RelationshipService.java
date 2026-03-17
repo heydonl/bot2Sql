@@ -59,6 +59,16 @@ public class RelationshipService {
     }
 
     /**
+     * 根据模型 ID 列表查找相关的关系
+     */
+    public List<Relationship> listByModelIds(List<Long> modelIds) {
+        if (modelIds == null || modelIds.isEmpty()) {
+            return List.of();
+        }
+        return relationshipMapper.selectByModelIds(modelIds);
+    }
+
+    /**
      * 更新关系
      */
     @Transactional

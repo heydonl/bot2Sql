@@ -53,4 +53,9 @@ public interface ColumnDefinitionMapper {
      */
     List<ColumnDefinition> selectByColumnType(@Param("modelId") Long modelId,
                                                @Param("columnType") String columnType);
+
+    /**
+     * 根据字段名查找所有匹配的字段定义（跨表）
+     */
+    List<ColumnDefinition> selectByColumnName(@Param("columnName") String columnName);
 }

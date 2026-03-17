@@ -8,9 +8,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 语义上下文生成服务
@@ -279,5 +282,141 @@ public class SemanticContextService {
      */
     public String generateUserPrompt(String question) {
         return "用户问题: " + question + "\n\n请生成对应的 SQL 查询语句。";
+    }
+
+    /**
+     * 根据字段列表生成精确的系统提示词
+     * 用于意图分析后的精确上下文生成
+     *
+     * @param datasourceId 数据源 ID
+     * @param fieldNames 字段名列表（维度 + 指标）
+     * @return 系统提示词
+     */
+    public String generateSystemPromptForTables(Long datasourceId, List<String> fieldNames) {
+        log.info("根据字段列表生成精确上下文: datasourceId={}, fields={}", datasourceId, fieldNames);
+
+        if (fieldNames == null || fieldNames.isEmpty()) {
+            log.warn("字段列表为空，降级到 RAG 检索");
+            return generateSystemPrompt(datasourceId, "");
+        }
+
+        // 1. 查询包含这些字段的所有表
+        Set<Long> modelIds = new HashSet<>();
+        for (String fieldName : fieldNames) {
+            List<ColumnDefinition> columns = columnDefinitionService.listByColumnName(fieldName);
+            for (ColumnDefinition column : columns) {
+                Model model = modelService.getById(column.getModelId());
+                if (model != null && model.getDatasourceId().equals(datasourceId)) {
+                    modelIds.add(column.getModelId());
+                }
+            }
+        }
+
+        if (modelIds.isEmpty()) {
+            log.warn("未找到包含指定字段的表，降级到 RAG 检索");
+            return generateSystemPrompt(datasourceId, String.join(", ", fieldNames));
+        }
+
+        log.info("找到 {} 个相关表: {}", modelIds.size(), modelIds);
+
+        // 2. 获取这些表的完整信息
+        List<Model> models = modelIds.stream()
+            .map(modelService::getById)
+            .filter(java.util.Objects::nonNull)
+            .toList();
+
+        // 3. 查询这些表之间的关系
+        List<Relationship> relationships = relationshipService.listByModelIds(new ArrayList<>(modelIds));
+
+        // 4. 构建系统提示词
+        return buildSystemPromptFromModels(models, relationships, datasourceId);
+    }
+
+    /**
+     * 根据模型列表和关系构建系统提示词
+     */
+    private String buildSystemPromptFromModels(List<Model> models, List<Relationship> relationships, Long datasourceId) {
+        StringBuilder prompt = new StringBuilder();
+
+        prompt.append("你是一个专业的 SQL 查询助手。你的任务是根据用户的自然语言问题生成准确的 SQL 查询语句。\n\n");
+
+        // 添加数据库结构信息
+        prompt.append("## 数据库结构\n\n");
+
+        for (Model model : models) {
+            if (!model.getIsVisible()) {
+                continue;
+            }
+
+            prompt.append("#### 表: ").append(model.getTableName()).append("\n");
+            if (model.getDescription() != null && !model.getDescription().isEmpty()) {
+                prompt.append("**描述**: ").append(model.getDescription()).append("\n");
+            }
+            if (model.getPrimaryKey() != null) {
+                prompt.append("**主键**: ").append(model.getPrimaryKey()).append("\n");
+            }
+            prompt.append("\n**字段列表**:\n");
+
+            // 获取字段信息
+            List<ColumnDefinition> columns = columnDefinitionService.listByModelId(model.getId());
+            for (ColumnDefinition column : columns) {
+                prompt.append("- `").append(column.getColumnName()).append("` (")
+                      .append(column.getDataType()).append(")");
+
+                if (column.getDescription() != null && !column.getDescription().isEmpty()) {
+                    prompt.append(": ").append(column.getDescription());
+                }
+
+                if (column.getColumnType() != null) {
+                    prompt.append(" [").append(column.getColumnType()).append("]");
+                }
+
+                prompt.append("\n");
+            }
+            prompt.append("\n");
+        }
+
+        // 添加表关系信息
+        if (!relationships.isEmpty()) {
+            prompt.append("## 表关系\n\n");
+            for (Relationship rel : relationships) {
+                Model fromModel = modelService.getById(rel.getFromModelId());
+                Model toModel = modelService.getById(rel.getToModelId());
+
+                if (fromModel != null && toModel != null) {
+                    prompt.append("- ").append(fromModel.getTableName())
+                          .append(" → ").append(toModel.getTableName())
+                          .append(" (").append(rel.getJoinType()).append(")");
+
+                    if (rel.getDescription() != null) {
+                        prompt.append(": ").append(rel.getDescription());
+                    }
+
+                    prompt.append("\n  JOIN 条件: ").append(rel.getJoinCondition()).append("\n");
+                }
+            }
+            prompt.append("\n");
+        }
+
+        // 添加 SQL 生成规则
+        prompt.append("## SQL 生成规则\n\n");
+        prompt.append("1. 只生成 SELECT 查询语句，不要生成 INSERT、UPDATE、DELETE 等修改数据的语句\n");
+        prompt.append("2. 使用标准的 MySQL 语法\n");
+        prompt.append("3. 字段名和表名使用反引号包裹（如 `table_name`.`column_name`）\n");
+        prompt.append("4. 如果需要 JOIN 多个表，使用上面定义的表关系\n");
+        prompt.append("5. 对于聚合查询，使用适当的 GROUP BY 子句\n");
+        prompt.append("6. 添加合理的 LIMIT 限制（默认 100 条）\n");
+        prompt.append("7. 只返回 SQL 语句，用 ```sql 代码块包裹\n");
+        prompt.append("8. 在 SQL 语句后，用自然语言简要解释这个查询的含义\n\n");
+
+        prompt.append("## 示例\n\n");
+        prompt.append("用户问题: 查询所有用户的数量\n");
+        prompt.append("你的回答:\n");
+        prompt.append("```sql\n");
+        prompt.append("SELECT COUNT(*) as user_count FROM `users`;\n");
+        prompt.append("```\n");
+        prompt.append("这个查询统计了 users 表中的总记录数。\n");
+
+        return prompt.toString();
     }
 }

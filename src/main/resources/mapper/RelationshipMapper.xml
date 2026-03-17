@@ -64,4 +64,16 @@
         SELECT * FROM relationship WHERE workspace_id = #{workspaceId} ORDER BY created_at DESC
     </select>
 
+    <select id="selectByModelIds" resultMap="BaseResultMap">
+        SELECT * FROM relationship
+        WHERE from_model_id IN
+        <foreach collection="modelIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        OR to_model_id IN
+        <foreach collection="modelIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
 </mapper>

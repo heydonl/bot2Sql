@@ -63,6 +63,13 @@ public class ColumnDefinitionService {
     }
 
     /**
+     * 根据字段名查找所有匹配的字段定义（跨表）
+     */
+    public List<ColumnDefinition> listByColumnName(String columnName) {
+        return columnDefinitionMapper.selectByColumnName(columnName);
+    }
+
+    /**
      * 更新字段定义
      */
     @Transactional
