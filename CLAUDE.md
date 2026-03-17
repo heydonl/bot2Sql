@@ -94,8 +94,90 @@
 4. Spring Boot 配置是否设置了 UTF-8 编码
 5. 前端是否正确设置了 charset=UTF-8
 
+## 文档规范
+
+- 所有 Markdown 文档（`.md`）统一存放在 `docs/` 目录下
+- 非文档性质文件（如配置、源码说明中的内联注释）不受此规则影响
+- 新增或迁移文档时，优先按主题在 `docs/` 下分目录组织
+
 ## 部署规范
 每次启动的时候都要关闭上一次启动过的端口，不然一直占用资源
+
+## Superpowers 技能使用规则
+
+**【强制规则】在执行任何任务之前，必须先检查是否有适用的 Superpowers 技能**
+
+### 核心原则
+
+1. **优先级最高**：收到用户任务后，第一步是检查是否有适用的 Superpowers 技能
+2. **即使 1% 可能性也要调用**：如果认为某个技能有哪怕 1% 的可能性适用，就必须调用它
+3. **不要跳过**：绝对不允许因为"任务简单"、"我已经知道怎么做"等理由跳过技能调用
+4. **不要合理化**：不要用"我先探索一下"、"让我先看看代码"等理由推迟技能调用
+
+### 必须使用的场景
+
+**创建新功能或修改现有功能时：**
+- ✅ 必须先使用 `superpowers:brainstorming` 探索需求
+- ✅ 然后使用 `superpowers:writing-plans` 编写实施计划
+- ✅ 最后使用 `superpowers:executing-plans` 或 `superpowers:subagent-driven-development` 执行
+
+**实现任何功能或修复 bug 时：**
+- ✅ 使用 `superpowers:test-driven-development` 先写测试
+
+**遇到 bug、测试失败或意外行为时：**
+- ✅ 使用 `superpowers:systematic-debugging` 系统化调试
+
+**完成任务、实现主要功能或准备合并时：**
+- ✅ 使用 `superpowers:requesting-code-review` 请求代码审查
+
+**声称工作完成、修复或通过测试之前：**
+- ✅ 使用 `superpowers:verification-before-completion` 验证
+
+**需要隔离工作环境时：**
+- ✅ 使用 `superpowers:using-git-worktrees` 创建 worktree
+
+**面对 2 个以上独立任务时：**
+- ✅ 使用 `superpowers:dispatching-parallel-agents` 并行处理
+
+### 错误的思维模式（必须避免）
+
+❌ "这个任务很简单，不需要技能"
+❌ "我先看看代码再决定"
+❌ "让我先探索一下项目"
+❌ "我已经知道怎么做了"
+❌ "这只是一个小改动"
+❌ "我记得这个技能的内容"
+❌ "技能太重了，不适合这个任务"
+❌ "我先做一件事，然后再用技能"
+
+### 正确的工作流程
+
+```
+用户请求 → 检查 Superpowers 技能 → 调用适用技能 → 按技能指导执行
+```
+
+**不是：**
+```
+用户请求 → 直接开始实现 ❌
+用户请求 → 先探索代码 → 然后实现 ❌
+用户请求 → 问几个问题 → 然后实现 ❌
+```
+
+### 可用的 Superpowers 技能
+
+- `superpowers:brainstorming` - 创意工作前的需求探索（必须用于任何新功能）
+- `superpowers:writing-plans` - 编写实施计划
+- `superpowers:executing-plans` - 执行实施计划
+- `superpowers:subagent-driven-development` - 当前会话中执行独立任务
+- `superpowers:test-driven-development` - TDD 开发
+- `superpowers:systematic-debugging` - 系统化调试
+- `superpowers:verification-before-completion` - 完成前验证
+- `superpowers:requesting-code-review` - 请求代码审查
+- `superpowers:receiving-code-review` - 接收代码审查反馈
+- `superpowers:finishing-a-development-branch` - 完成开发分支
+- `superpowers:using-git-worktrees` - 使用 Git worktrees
+- `superpowers:dispatching-parallel-agents` - 派发并行代理
+- `superpowers:writing-skills` - 创建和编辑技能
 
 ## 可用技能
 

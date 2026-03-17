@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS query_template (
     datasource_id BIGINT COMMENT '关联数据源',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    UNIQUE KEY uk_skeleton (skeleton),
+    UNIQUE KEY uk_skeleton (skeleton(255)),
     INDEX idx_intent (intent),
     INDEX idx_entity (entity),
     INDEX idx_score (score DESC)

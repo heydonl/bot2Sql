@@ -66,6 +66,7 @@ public class MessageService {
         Message message = new Message();
         message.setConversationId(conversationId);
         message.setRole("assistant");
+        message.setContent("抱歉，查询执行失败：" + errorMessage);
         message.setErrorMessage(errorMessage);
 
         messageMapper.insert(message);
