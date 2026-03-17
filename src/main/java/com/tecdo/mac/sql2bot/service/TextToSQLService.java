@@ -1,8 +1,13 @@
 package com.tecdo.mac.sql2bot.service;
 
+import tools.jackson.databind.ObjectMapper;
 import com.tecdo.mac.sql2bot.domain.Conversation;
+import com.tecdo.mac.sql2bot.domain.QueryLog;
+import com.tecdo.mac.sql2bot.domain.QueryTemplate;
 import com.tecdo.mac.sql2bot.dto.QueryRequest;
 import com.tecdo.mac.sql2bot.dto.QueryResponse;
+import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisRequest;
+import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,6 +28,11 @@ public class TextToSQLService {
     private final QueryExecutorService queryExecutorService;
     private final ConversationService conversationService;
     private final MessageService messageService;
+    private final IntentAnalysisService intentAnalysisService;
+    private final QueryTemplateService queryTemplateService;
+    private final TemplateParameterService templateParameterService;
+    private final QueryLogService queryLogService;
+    private final ObjectMapper objectMapper;
 
     /**
      * 处理自然语言查询（支持会话隔离和多轮对话）
@@ -60,61 +70,168 @@ public class TextToSQLService {
                 messageService.saveUserMessage(conversationId, request.getQuestion());
             }
 
-            // 4. 生成语义上下文（使用 RAG 检索相关表和字段）
+            // 4. 意图分析
             Long datasourceId = request.getDatasourceId();
-            if (datasourceId == null) {
-                log.info("No datasource specified, will auto-detect from all available datasources");
+            IntentAnalysisRequest intentRequest = new IntentAnalysisRequest();
+            intentRequest.setQuestion(request.getQuestion());
+
+            IntentAnalysisResponse intentResponse = null;
+            String skeleton = null;
+            try {
+                intentResponse = intentAnalysisService.analyzeIntent(intentRequest);
+                skeleton = intentAnalysisService.convertToSkeleton(intentResponse);
+                log.info("意图分析完成: intent={}, skeleton={}", intentResponse.getIntent(), skeleton);
+            } catch (Exception e) {
+                log.error("意图分析失败，降级到直接 LLM 生成", e);
+            }
+
+            // 5. 模板检索和验证
+            QueryTemplate matchedTemplate = null;
+            if (skeleton != null) {
+                QueryTemplate candidateTemplate = queryTemplateService.findTemplate(skeleton);
+                if (candidateTemplate != null && queryTemplateService.validateTemplate(candidateTemplate, intentResponse)) {
+                    matchedTemplate = candidateTemplate;
+                    log.info("模板验证通过: templateId={}", matchedTemplate.getId());
+                }
+            }
+
+            // 6. 生成 SQL（模板填充或 LLM 生成）
+            String sql;
+            String aiResponse = null;
+            Long templateId = null;
+            boolean isFromTemplate = false;
+
+            if (matchedTemplate != null) {
+                // 6a. 使用模板填充参数
+                try {
+                    sql = templateParameterService.fillTemplate(matchedTemplate, intentResponse);
+                    templateId = matchedTemplate.getId();
+                    isFromTemplate = true;
+                    queryTemplateService.incrementUsageCount(templateId);
+                    log.info("模板填充成功: templateId={}, sql={}", templateId, sql);
+                } catch (Exception e) {
+                    log.error("模板填充失败，降级到 LLM 生成", e);
+                    matchedTemplate = null;
+                    sql = null;
+                }
             } else {
-                log.info("Generating semantic context for datasource: {}", datasourceId);
+                sql = null;
             }
 
-            String systemPrompt = semanticContextService.generateSystemPrompt(datasourceId, request.getQuestion());
+            if (sql == null) {
+                // 6b. LLM 生成 SQL
+                if (datasourceId == null) {
+                    log.info("未指定数据源，将从所有可用数据源中自动检测");
+                } else {
+                    log.info("为数据源生成语义上下文: {}", datasourceId);
+                }
 
-            // 5. 如果有会话历史，添加对话上下文
-            String conversationContext = "";
-            if (conversationId != null) {
-                conversationContext = messageService.buildConversationContext(conversationId, 5);
+                String systemPrompt = semanticContextService.generateSystemPrompt(datasourceId, request.getQuestion());
+
+                String conversationContext = "";
+                if (conversationId != null) {
+                    conversationContext = messageService.buildConversationContext(conversationId, 5);
+                }
+
+                String userPrompt = semanticContextService.generateUserPrompt(request.getQuestion());
+                if (!conversationContext.isEmpty()) {
+                    userPrompt = conversationContext + "\n\n" + userPrompt;
+                }
+
+                log.info("调用 AI 服务生成 SQL: {}", request.getQuestion());
+                aiResponse = aiService.generateSQL(systemPrompt, userPrompt);
+                log.debug("AI 响应: {}", aiResponse);
+
+                sql = aiService.extractSQL(aiResponse);
+                log.info("LLM 生成 SQL: {}", sql);
             }
 
-            String userPrompt = semanticContextService.generateUserPrompt(request.getQuestion());
-            if (!conversationContext.isEmpty()) {
-                userPrompt = conversationContext + "\n\n" + userPrompt;
-            }
-
-            // 6. 调用 AI 生成 SQL
-            log.info("Calling AI service to generate SQL for question: {}", request.getQuestion());
-            String aiResponse = aiService.generateSQL(systemPrompt, userPrompt);
-            log.debug("AI response: {}", aiResponse);
-
-            // 7. 提取 SQL 语句
-            String sql = aiService.extractSQL(aiResponse);
-            log.info("Generated SQL: {}", sql);
-
-            // 8. 如果未指定数据源，从 SQL 中推断
+            // 7. 推断数据源
             if (datasourceId == null) {
                 datasourceId = semanticContextService.inferDataSourceFromSQL(sql);
                 if (datasourceId == null) {
                     throw new IllegalStateException("无法从 SQL 中推断出数据源，请检查表名是否正确");
                 }
-                log.info("Auto-detected datasource: {}", datasourceId);
+                log.info("自动检测到数据源: {}", datasourceId);
             }
 
-            // 9. 提取解释
-            String explanation = extractExplanation(aiResponse);
+            // 8. 提取解释（仅 LLM 生成时有 AI 响应）
+            String explanation = aiResponse != null ? extractExplanation(aiResponse) : "通过模板匹配生成查询";
 
-            // 10. 执行 SQL 查询
-            log.info("Executing SQL query on datasource: {}", datasourceId);
-            List<Map<String, Object>> data = queryExecutorService.executeQuery(datasourceId, sql);
+            // 9. 执行 SQL
+            long executionStart = System.currentTimeMillis();
+            boolean executionSuccess = false;
+            int resultCount = 0;
+            List<Map<String, Object>> data = null;
+            String errorMessage = null;
 
-            long executionTime = System.currentTimeMillis() - startTime;
+            try {
+                log.info("执行 SQL 查询: datasourceId={}", datasourceId);
+                data = queryExecutorService.executeQuery(datasourceId, sql);
+                resultCount = data.size();
+                executionSuccess = true;
+            } catch (Exception e) {
+                errorMessage = e.getMessage();
+                log.error("SQL 执行失败", e);
+            }
 
-            // 11. 保存助手消息
+            long executionTime = System.currentTimeMillis() - executionStart;
+
+            // 10. 记录查询日志
+            try {
+                QueryLog queryLog = new QueryLog();
+                queryLog.setUserId(request.getUserId());
+                queryLog.setConversationId(conversationId);
+                queryLog.setQuestion(request.getQuestion());
+                queryLog.setIntent(intentResponse != null ? intentResponse.getIntent().name() : null);
+                queryLog.setIntentJson(intentResponse != null ?
+                        objectMapper.writeValueAsString(intentResponse) : null);
+                queryLog.setSkeleton(skeleton);
+                queryLog.setTemplateId(templateId);
+                queryLog.setIsFromTemplate(isFromTemplate);
+                queryLog.setGeneratedSql(sql);
+                queryLog.setExecutionSuccess(executionSuccess);
+                queryLog.setExecutionTime(executionTime);
+                queryLog.setResultCount(resultCount);
+                queryLog.setDatasourceId(datasourceId);
+
+                queryLogService.logQuery(queryLog);
+            } catch (Exception e) {
+                log.warn("记录查询日志失败（不影响查询结果）", e);
+            }
+
+            // 11. 如果执行失败，抛出异常
+            if (!executionSuccess) {
+                throw new RuntimeException("SQL 执行失败: " + errorMessage);
+            }
+
+            // 12. 如果是 LLM 生成且执行成功，保存为新模板
+            if (!isFromTemplate && intentResponse != null && skeleton != null) {
+                try {
+                    queryTemplateService.saveGeneratedTemplate(
+                            skeleton,
+                            sql,
+                            intentResponse.getIntent().name(),
+                            intentResponse.getEntity(),
+                            intentResponse.getDimensions(),
+                            intentResponse.getMetrics(),
+                            datasourceId
+                    );
+                    log.info("新模板已保存: skeleton={}", skeleton);
+                } catch (Exception e) {
+                    log.warn("保存模板失败（不影响查询结果）", e);
+                }
+            }
+
+            long totalTime = System.currentTimeMillis() - startTime;
+
+            // 13. 保存助手消息
             if (conversationId != null) {
                 messageService.saveAssistantMessage(conversationId, explanation, sql, data);
             }
 
-            // 12. 返回结果
-            return QueryResponse.success(conversationId, sql, explanation, data, executionTime);
+            // 14. 返回结果
+            return QueryResponse.success(conversationId, sql, explanation, data, totalTime);
 
         } catch (Exception e) {
             log.error("Failed to process query", e);
