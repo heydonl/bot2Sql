@@ -4,7 +4,9 @@
 
 **背景：** 当前 TextToSQLService 在生成 SQL 时，使用关键词 RAG 检索相关表结构。这种方式在意图分析完成后，无法根据骨架字符串精确检索相关表，导致 LLM 生成 SQL 时缺乏准确的表结构上下文。
 
-**目标：** 创建一个定时任务模块，将 model 表和 column_definition 表的数据同步到 RedisStack 向量数据库中。查询时根据意图骨架字符串进行语义检索，将相关表结构信息传给 LLM，由 LLM 生成带 `{{paramName}}` 占位符的 SQL 骨架，再由 TemplateParameterService 填充参数执行。
+**目标：** 创建一个定时任务模块，将 model 表和 column_definition 表的数据同步到 RedisStack 向量数据库中。查询时根据意图骨架字符串进行语义检索，将相关表结构信息传给 LLM，由 LLM 生成带 `{{paramName}}` 占位符的 SQL 骨架和参数定义，再由 TemplateParameterService 填充参数执行。
+
+**迁移说明：** 现有 `VectorStoreService` 使用普通 Redis key-value + Java 层暴力遍历余弦相似度，性能差且无法扩展。本次将其**替换**为 RedisStack 原生 KNN 向量搜索，`SchemaVectorStoreService` 承接其职责，`VectorStoreService` 废弃。
 
 ---
 
@@ -18,7 +20,7 @@ src/main/java/com/tecdo/mac/sql2bot/
 │   ├── SchemaIndexScheduler.java       # 定时任务入口（@Scheduled，每小时）
 │   └── SchemaIndexService.java         # 增量索引逻辑
 ├── service/
-│   └── SchemaVectorStoreService.java   # RedisStack 向量存储服务
+│   └── SchemaVectorStoreService.java   # RedisStack 向量存储服务（替换 VectorStoreService）
 └── controller/
     └── SchedulerController.java        # 管理接口（启停、手动触发、状态查询）
 ```
@@ -28,17 +30,24 @@ src/main/java/com/tecdo/mac/sql2bot/
 ```
 src/main/java/com/tecdo/mac/sql2bot/
 ├── service/
-│   └── TextToSQLService.java           # 第128行附近集成骨架检索 + LLM 生成 SQL 骨架
+│   ├── TextToSQLService.java           # 第128行附近集成骨架检索 + LLM 生成 SQL 骨架
+│   └── VectorRAGService.java           # 改为依赖 SchemaVectorStoreService
 └── mapper/
     ├── ModelMapper.java                # 新增 selectUpdatedAfter 方法
     └── ColumnDefinitionMapper.java     # 新增 selectUpdatedAfter 方法
 ```
 
-### 2.3 数据流总览
+### 2.3 废弃文件
+
+```
+src/main/java/com/tecdo/mac/sql2bot/service/VectorStoreService.java  # 废弃，由 SchemaVectorStoreService 替代
+```
+
+### 2.4 数据流总览
 
 ```
 【定时任务】每小时
-model + column_definition → 合并文本 → Embedding → RedisStack HSET
+model + column_definition → 合并文本 → Embedding(1024维) → RedisStack HSET
 
 【查询流程】
 用户问题 → 意图分析 → 骨架字符串
@@ -47,7 +56,7 @@ model + column_definition → 合并文本 → Embedding → RedisStack HSET
                               ↓
                     top-K 相关表的 meta JSON
                               ↓
-                    LLM（意图JSON + 表结构）→ SQL 骨架（{{param}}）
+                    LLM（意图JSON + 表结构）→ {sql_template, parameters}
                               ↓
                     TemplateParameterService 填充参数
                               ↓
@@ -60,7 +69,7 @@ model + column_definition → 合并文本 → Embedding → RedisStack HSET
 
 ### 3.1 SchemaIndexScheduler（定时任务入口）
 
-**职责：** 每小时触发一次增量索引，支持动态启停，失败时发送告警。
+**职责：** 每小时触发一次增量索引，支持动态启停，失败时记录错误日志。
 
 **关键实现：**
 ```java
@@ -76,8 +85,7 @@ public class SchemaIndexScheduler {
         try {
             schemaIndexService.incrementalIndex();
         } catch (Exception e) {
-            log.error("Schema 增量索引失败", e);
-            alertService.sendAlert("Schema 索引任务失败", e.getMessage());
+            log.error("Schema 增量索引失败，下次执行时将重试", e);
         }
     }
 
@@ -107,22 +115,22 @@ public class SchemaIndexScheduler {
 
 ### 3.3 SchemaVectorStoreService（RedisStack 向量存储）
 
-**职责：** 管理 RedisStack 向量索引的创建、存储和搜索。
+**职责：** 替换现有 VectorStoreService，使用 RedisStack 原生 KNN 向量搜索管理表结构索引。
 
-**RedisStack 索引结构：**
+**RedisStack 索引结构（DIM 从配置读取，默认 1024）：**
 ```bash
 FT.CREATE idx:schema ON HASH PREFIX 1 "schema:"
 SCHEMA
   table_name TEXT
   datasource_id NUMERIC
-  vector VECTOR HNSW 6 TYPE FLOAT32 DIM 1536 DISTANCE_METRIC COSINE
+  vector VECTOR HNSW 6 TYPE FLOAT32 DIM {embedding.dimension} DISTANCE_METRIC COSINE
 ```
 
 **Hash 存储结构（key: `schema:{modelId}`）：**
 ```
 table_name    → "work_order_task"
 datasource_id → 11
-vector        → <float[1536] 二进制>
+vector        → <float[1024] 二进制>
 meta          → { 完整表结构 JSON }
 ```
 
@@ -162,14 +170,15 @@ FT.SEARCH idx:schema
 // 2. 在 RedisStack 中 KNN 搜索相关表（top 10，按 datasourceId 过滤）
 // 3. 获取 top-K 表的 meta JSON（表名、字段、数据源）
 // 4. 构建 LLM Prompt（意图 JSON + 表结构）
-// 5. 调用 LLM 生成带 {{paramName}} 占位符的 SQL 骨架
-// 6. 调用 TemplateParameterService.fillTemplate() 填充参数
-// 7. 执行 SQL
+// 5. 调用 LLM，要求同时返回 sql_template 和 parameters 定义
+// 6. 解析 LLM 返回的 JSON，构建 QueryTemplate 对象
+// 7. 调用 TemplateParameterService.fillTemplate() 填充参数
+// 8. 执行 SQL
 ```
 
 **LLM Prompt 格式：**
 ```
-你是一个 SQL 生成专家。根据以下信息生成 SQL 骨架：
+你是一个 SQL 生成专家。根据以下信息生成 SQL 骨架和参数定义：
 
 ## 用户意图
 {intentJson}
@@ -184,13 +193,30 @@ FT.SEARCH idx:schema
 - created_at (DATETIME) - 创建时间
 
 ## 要求
-1. 生成标准 MySQL SQL
-2. 所有参数使用 {{paramName}} 占位符
-3. 只输出 SQL，不要解释
-4. 使用 ```sql ``` 代码块包裹
+1. 生成标准 MySQL SQL，所有参数使用 {{paramName}} 占位符
+2. 同时输出参数定义列表，说明每个参数对应意图 JSON 的哪个字段和类型
+3. 使用以下 JSON 格式输出，用 ```json ``` 代码块包裹：
+
+{
+  "sql_template": "SELECT ... WHERE advertiser_id = {{advertiserId}} AND ...",
+  "parameters": [
+    { "name": "advertiserId", "source": "filters.advertiser_id", "type": "NUMBER" },
+    { "name": "startDate",    "source": "dateRanges.startDate",  "type": "DATE" }
+  ]
+}
+```
+
+**LLM 返回结构解析后构建 QueryTemplate：**
+```java
+QueryTemplate template = new QueryTemplate();
+template.setSqlTemplate(llmResult.getSqlTemplate());
+template.setParameters(gson.toJson(llmResult.getParameters()));
+// 然后调用 TemplateParameterService.fillTemplate(template, intentResponse)
 ```
 
 ### 3.5 SchedulerController（管理接口）
+
+**职责：** 提供内部运维接口，用于手动触发索引任务和查看任务状态。仅供内部使用，不对外暴露，无需鉴权（依赖网络隔离保护）。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -206,21 +232,11 @@ FT.SEARCH idx:schema
 
 | 场景 | 处理方式 |
 |------|------|
-| 数据库连接失败 | 记录错误日志 + 发送告警，跳过本次执行 |
-| Redis 不可用 | 记录错误日志 + 发送告警，跳过本次执行 |
-| Embedding 生成失败 | 记录错误日志，跳过该条记录，继续处理其他记录 |
-| LLM 生成 SQL 失败 | 降级到原有的 RAG 检索流程 |
-| 参数填充失败 | 降级到原有的 LLM 直接生成流程 |
-
-### AlertService（告警通知）
-
-```java
-@Component
-public class AlertService {
-    // 支持钉钉 / 企业微信 / 邮件，通过配置选择
-    public void sendAlert(String title, String message);
-}
-```
+| 数据库连接失败 | log.error，跳过本次执行，下次定时重试 |
+| Redis 不可用 | log.error，跳过本次执行，下次定时重试 |
+| Embedding 生成失败 | log.error，跳过该条记录，继续处理其他记录 |
+| LLM 生成 SQL 失败 | log.error，降级到原有的 RAG 检索流程 |
+| 参数填充失败 | log.error，降级到原有的 LLM 直接生成流程 |
 
 ---
 
@@ -232,10 +248,6 @@ scheduler.schema-index.enabled=true
 
 # 执行频率（默认每小时）
 scheduler.schema-index.cron=0 0 * * * ?
-
-# 告警通知方式（dingtalk / wechat / email）
-scheduler.alert.type=dingtalk
-scheduler.alert.webhook=https://oapi.dingtalk.com/robot/send?access_token=xxx
 ```
 
 ---
