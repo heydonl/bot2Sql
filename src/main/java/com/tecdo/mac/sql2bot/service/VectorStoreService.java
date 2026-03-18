@@ -15,7 +15,10 @@ import java.util.stream.Collectors;
 /**
  * Redis 向量存储服务
  * 用于存储和检索表/字段的向量表示
+ *
+ * @deprecated 已废弃，请使用 SchemaVectorStoreService
  */
+@Deprecated
 @Slf4j
 @Service
 @RequiredArgsConstructor

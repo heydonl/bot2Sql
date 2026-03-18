@@ -3,6 +3,7 @@ package com.tecdo.mac.sql2bot.service;
 import com.tecdo.mac.sql2bot.domain.ColumnDefinition;
 import com.tecdo.mac.sql2bot.domain.Model;
 import com.tecdo.mac.sql2bot.domain.Relationship;
+import com.tecdo.mac.sql2bot.scheduler.SchemaIndexService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,9 +21,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class VectorRAGService {
 
-    private final VectorStoreService vectorStoreService;
+    private final SchemaVectorStoreService schemaVectorStoreService;
+    private final SchemaIndexService schemaIndexService;
     private final ModelService modelService;
-    private final ColumnDefinitionService columnDefinitionService;
     private final RelationshipService relationshipService;
 
     /**
@@ -33,11 +34,11 @@ public class VectorRAGService {
                 question, datasourceId, topK);
 
         // 1. 搜索相关的表
-        List<VectorStoreService.ModelSearchResult> modelResults =
-                vectorStoreService.searchModels(question, datasourceId, topK);
+        List<SchemaVectorStoreService.SchemaSearchResult> searchResults =
+                schemaVectorStoreService.searchSchemas(question, datasourceId, topK);
 
-        if (modelResults.isEmpty()) {
-            log.warn("No relevant models found for question: {}", question);
+        if (searchResults.isEmpty()) {
+            log.warn("No relevant schemas found for question: {}", question);
             return new RetrievalResult(
                     Collections.emptyList(),
                     Collections.emptyMap(),
@@ -46,27 +47,36 @@ public class VectorRAGService {
         }
 
         // 2. 提取相关表的 ID
-        List<Long> relevantModelIds = modelResults.stream()
-                .map(r -> r.getModel().getId())
+        List<Long> relevantModelIds = searchResults.stream()
+                .map(r -> r.getMeta().getModelId())
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
 
         log.info("Found {} relevant models: {}", relevantModelIds.size(), relevantModelIds);
 
-        // 3. 搜索相关的字段
-        List<VectorStoreService.ColumnSearchResult> columnResults =
-                vectorStoreService.searchColumns(question, relevantModelIds, topK * 3);
-
-        // 4. 按模型分组字段
+        // 3. 从 SchemaMeta 中构建 ColumnDefinition 列表（按 modelId 分组）
         Map<Long, List<ColumnDefinition>> modelColumns = new HashMap<>();
-        for (VectorStoreService.ColumnSearchResult result : columnResults) {
-            Long modelId = result.getColumn().getModelId();
-            ColumnDefinition column = columnDefinitionService.getById(result.getColumn().getId());
-            if (column != null) {
-                modelColumns.computeIfAbsent(modelId, k -> new ArrayList<>()).add(column);
+        for (SchemaVectorStoreService.SchemaSearchResult result : searchResults) {
+            SchemaVectorStoreService.SchemaMeta meta = result.getMeta();
+            if (meta == null || meta.getModelId() == null) {
+                continue;
             }
+            Long modelId = meta.getModelId();
+            List<ColumnDefinition> columns = new ArrayList<>();
+            if (meta.getColumns() != null) {
+                for (SchemaVectorStoreService.SchemaMeta.ColumnInfo colInfo : meta.getColumns()) {
+                    ColumnDefinition col = new ColumnDefinition();
+                    col.setModelId(modelId);
+                    col.setColumnName(colInfo.getColumnName());
+                    col.setDisplayName(colInfo.getDisplayName());
+                    col.setColumnType(colInfo.getColumnType());
+                    columns.add(col);
+                }
+            }
+            modelColumns.put(modelId, columns);
         }
 
-        // 5. 加载完整的 Model 对象
+        // 4. 加载完整的 Model 对象
         List<Model> relevantModels = new ArrayList<>();
         for (Long modelId : relevantModelIds) {
             Model model = modelService.getById(modelId);
@@ -75,7 +85,7 @@ public class VectorRAGService {
             }
         }
 
-        // 6. 查找相关表之间的关系
+        // 5. 查找相关表之间的关系
         List<Relationship> relevantRelationships = findRelevantRelationships(relevantModelIds);
 
         log.info("Vector RAG retrieved {} models, {} columns, {} relationships",
@@ -104,66 +114,24 @@ public class VectorRAGService {
      * 为所有表和字段建立索引
      */
     public void indexAllModelsAndColumns() {
-        log.info("Starting to index all models and columns...");
-
-        // 清空现有索引
-        vectorStoreService.clearAll();
-
-        // 索引所有表
-        List<Model> allModels = modelService.listAll();
-        log.info("Indexing {} models", allModels.size());
-
-        for (Model model : allModels) {
-            try {
-                vectorStoreService.indexModel(model);
-
-                // 索引该表的所有字段
-                List<ColumnDefinition> columns = columnDefinitionService.listByModelId(model.getId());
-                for (ColumnDefinition column : columns) {
-                    vectorStoreService.indexColumn(column);
-                }
-
-                log.info("Indexed model {} with {} columns", model.getTableName(), columns.size());
-
-            } catch (Exception e) {
-                log.error("Failed to index model: {}", model.getId(), e);
-            }
-        }
-
-        log.info("Finished indexing all models and columns");
+        log.info("Starting full index via SchemaIndexService...");
+        schemaIndexService.fullIndex();
+        log.info("Full index completed");
     }
 
     /**
      * 为单个表建立索引
      */
     public void indexModel(Long modelId) {
-        Model model = modelService.getById(modelId);
-        if (model == null) {
-            log.warn("Model not found: {}", modelId);
-            return;
-        }
-
-        vectorStoreService.indexModel(model);
-
-        List<ColumnDefinition> columns = columnDefinitionService.listByModelId(modelId);
-        for (ColumnDefinition column : columns) {
-            vectorStoreService.indexColumn(column);
-        }
-
-        log.info("Indexed model {} with {} columns", model.getTableName(), columns.size());
+        log.info("Triggering incremental index for modelId: {}", modelId);
+        schemaIndexService.incrementalIndex();
     }
 
     /**
      * 删除表的索引
      */
     public void deleteModelIndex(Long modelId) {
-        vectorStoreService.deleteModel(modelId);
-
-        List<ColumnDefinition> columns = columnDefinitionService.listByModelId(modelId);
-        for (ColumnDefinition column : columns) {
-            vectorStoreService.deleteColumn(column.getId());
-        }
-
+        schemaVectorStoreService.deleteModel(modelId);
         log.info("Deleted index for model: {}", modelId);
     }
 
