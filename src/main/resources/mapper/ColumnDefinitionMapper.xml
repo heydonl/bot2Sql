@@ -68,4 +68,8 @@
         SELECT * FROM column_definition WHERE column_name = #{columnName}
     </select>
 
+    <select id="selectUpdatedAfter" resultMap="BaseResultMap">
+        SELECT * FROM column_definition WHERE updated_at > #{updatedAfter} ORDER BY updated_at ASC
+    </select>
+
 </mapper>

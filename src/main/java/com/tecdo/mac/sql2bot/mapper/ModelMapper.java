@@ -4,6 +4,7 @@ import com.tecdo.mac.sql2bot.domain.Model;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -57,4 +58,14 @@ public interface ModelMapper {
      * 查询可见的模型
      */
     List<Model> selectVisible();
+
+    /**
+     * 查询 updated_at 大于指定时间的 model
+     */
+    List<Model> selectUpdatedAfter(@Param("updatedAfter") LocalDateTime updatedAfter);
+
+    /**
+     * 查询所有 model（含 datasource 信息）
+     */
+    List<Model> selectAllWithDatasource();
 }

@@ -4,6 +4,7 @@ import com.tecdo.mac.sql2bot.domain.ColumnDefinition;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -58,4 +59,9 @@ public interface ColumnDefinitionMapper {
      * 根据字段名查找所有匹配的字段定义（跨表）
      */
     List<ColumnDefinition> selectByColumnName(@Param("columnName") String columnName);
+
+    /**
+     * 查询 updated_at 大于指定时间的 column_definition
+     */
+    List<ColumnDefinition> selectUpdatedAfter(@Param("updatedAfter") LocalDateTime updatedAfter);
 }
