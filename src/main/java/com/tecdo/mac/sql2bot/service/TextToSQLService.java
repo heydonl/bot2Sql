@@ -1,5 +1,6 @@
 package com.tecdo.mac.sql2bot.service;
 
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.tecdo.mac.sql2bot.domain.Conversation;
 import com.tecdo.mac.sql2bot.domain.QueryLog;
@@ -32,6 +33,7 @@ public class TextToSQLService {
     private final QueryTemplateService queryTemplateService;
     private final TemplateParameterService templateParameterService;
     private final QueryLogService queryLogService;
+    private final SchemaVectorStoreService schemaVectorStoreService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -126,7 +128,27 @@ public class TextToSQLService {
                     log.info("为数据源生成语义上下文: {}", datasourceId);
                 }
 
-                String systemPrompt = semanticContextService.generateSystemPrompt(datasourceId, request.getQuestion());
+                // 6b-1. 基于骨架字符串进行语义检索相关表结构
+                String schemaContext = null;
+                if (skeleton != null) {
+                    try {
+                        List<SchemaVectorStoreService.SchemaSearchResult> schemaResults =
+                            schemaVectorStoreService.searchSchemas(skeleton, datasourceId, 10);
+                        if (!schemaResults.isEmpty()) {
+                            schemaContext = buildSchemaContext(schemaResults);
+                            log.info("骨架检索到 {} 个相关表", schemaResults.size());
+                        }
+                    } catch (Exception e) {
+                        log.error("骨架检索失败，降级到关键词 RAG", e);
+                    }
+                }
+
+                String systemPrompt;
+                if (schemaContext != null && intentResponse != null) {
+                    systemPrompt = buildSchemaBasedPrompt(intentResponse, schemaContext);
+                } else {
+                    systemPrompt = semanticContextService.generateSystemPrompt(datasourceId, request.getQuestion());
+                }
 
                 String conversationContext = "";
                 if (conversationId != null) {
@@ -144,6 +166,30 @@ public class TextToSQLService {
 
                 sql = aiService.extractSQL(aiResponse);
                 log.info("LLM 生成 SQL: {}", sql);
+
+                // 尝试解析 schema-based LLM 响应（含 sql_template + parameters）
+                if (schemaContext != null) {
+                    try {
+                        String jsonBlock = extractJsonBlock(aiResponse);
+                        if (jsonBlock != null) {
+                            JsonNode root = objectMapper.readTree(jsonBlock);
+                            if (root.has("sql_template") && root.has("parameters")) {
+                                QueryTemplate dynamicTemplate = new QueryTemplate();
+                                dynamicTemplate.setSqlTemplate(root.get("sql_template").asText());
+                                dynamicTemplate.setParameters(root.get("parameters").toString());
+                                if (intentResponse != null) {
+                                    String filledSql = templateParameterService.fillTemplate(dynamicTemplate, intentResponse);
+                                    if (filledSql != null && !filledSql.isEmpty()) {
+                                        sql = filledSql;
+                                        log.info("Schema-based 模板填充成功: {}", sql);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("Schema-based 响应解析失败，使用原始 SQL", e);
+                    }
+                }
             }
 
             // 7. 推断数据源
@@ -243,6 +289,69 @@ public class TextToSQLService {
 
             return QueryResponse.error(e.getMessage());
         }
+    }
+
+    /**
+     * 构建 Schema 上下文字符串
+     */
+    private String buildSchemaContext(List<SchemaVectorStoreService.SchemaSearchResult> results) {
+        StringBuilder sb = new StringBuilder();
+        for (SchemaVectorStoreService.SchemaSearchResult result : results) {
+            SchemaVectorStoreService.SchemaMeta meta = result.getMeta();
+            sb.append("表名: ").append(meta.getTableName());
+            if (meta.getDisplayName() != null) sb.append("（").append(meta.getDisplayName()).append("）");
+            sb.append("\n");
+            if (meta.getDatasourceName() != null) sb.append("数据源: ").append(meta.getDatasourceName()).append("\n");
+            sb.append("字段:\n");
+            if (meta.getColumns() != null) {
+                for (SchemaVectorStoreService.SchemaMeta.ColumnInfo col : meta.getColumns()) {
+                    sb.append("- ").append(col.getColumnName());
+                    if (col.getColumnType() != null) sb.append(" (").append(col.getColumnType()).append(")");
+                    if (col.getDisplayName() != null) sb.append(" - ").append(col.getDisplayName());
+                    sb.append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 构建基于 Schema 的 Prompt
+     */
+    private String buildSchemaBasedPrompt(IntentAnalysisResponse intentResponse, String schemaContext) {
+        String intentJson;
+        try {
+            intentJson = objectMapper.writeValueAsString(intentResponse);
+        } catch (Exception e) {
+            intentJson = intentResponse.toString();
+        }
+        return "你是一个 SQL 生成专家。根据以下信息生成 SQL 骨架和参数定义：\n\n" +
+               "## 用户意图\n" + intentJson + "\n\n" +
+               "## 相关表结构\n" + schemaContext +
+               "## 要求\n" +
+               "1. 生成标准 MySQL SQL，所有参数使用 {{paramName}} 占位符\n" +
+               "2. 同时输出参数定义列表，说明每个参数对应意图 JSON 的哪个字段和类型\n" +
+               "3. 使用以下 JSON 格式输出，用 ```json ``` 代码块包裹：\n\n" +
+               "{\n" +
+               "  \"sql_template\": \"SELECT ... WHERE advertiser_id = {{advertiserId}}\",\n" +
+               "  \"parameters\": [\n" +
+               "    { \"name\": \"advertiserId\", \"source\": \"entity.dimensionFilter.conditions[0].value\", \"type\": \"NUMBER\" }\n" +
+               "  ]\n" +
+               "}";
+    }
+
+    /**
+     * 从文本中提取 ```json ``` 代码块内容
+     */
+    private String extractJsonBlock(String text) {
+        if (text == null) return null;
+        int start = text.indexOf("```json");
+        if (start == -1) return null;
+        start = text.indexOf("\n", start) + 1;
+        int end = text.indexOf("```", start);
+        if (end == -1) return null;
+        return text.substring(start, end).trim();
     }
 
     /**
