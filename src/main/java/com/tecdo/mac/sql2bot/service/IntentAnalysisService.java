@@ -39,9 +39,11 @@ public class IntentAnalysisService {
 
             // 2. 构建包含 few-shot 的 prompt
             String prompt = buildIntentAnalysisPrompt(request, fewShots);
+            log.info("意图分析 Prompt 内容:\n{}", prompt);
 
             // 3. 调用 AI 服务进行意图分析
             String aiResponse = aiService.generateSQL("", prompt);
+            log.info("AI 返回的原始响应:\n{}", aiResponse);
 
             // 4. 解析 AI 返回的 JSON
             IntentAnalysisResponse response = parseIntentJson(aiResponse);
@@ -106,9 +108,6 @@ public class IntentAnalysisService {
                 ### 输出 JSON 结构
                 输出必须包含以下两个顶级字段：
                 - "intent": 意图类型（字符串）
-                - "entity": 对象，包含所有可能实体字段（缺失或无法确定时填 null）
-
-                entity 对象包含以下字段：
                 - entity: 实体类型（如 "work_order"）
                 - dimensions: 维度字段数组
                 - metrics: 指标数组，每个包含 field 和 aggregation
@@ -147,10 +146,13 @@ public class IntentAnalysisService {
         }
 
         prompt.append(String.format("""
-                ### 现在，请分析以下用户问题，输出 JSON：
+                ### 现在，请分析以下用户问题，输出 JSON（使用 ```json ``` 代码块包裹）：
 
                 用户：%s
                 输出：
+                ```json
+
+                ```
                 """, request.getQuestion()));
 
         return prompt.toString();
