@@ -58,33 +58,70 @@ public class SchemaVectorStoreService {
     @PostConstruct
     public void initIndex() {
         try {
-            jedisPooled.ftInfo(INDEX_NAME);
-            log.info("RedisStack 索引 {} 已存在，跳过创建", INDEX_NAME);
-        } catch (Exception e) {
-            log.info("创建 RedisStack 索引: {}", INDEX_NAME);
-            try {
-                Map<String, Object> vectorAttrs = new HashMap<>();
-                vectorAttrs.put("TYPE", "FLOAT32");
-                vectorAttrs.put("DIM", dimension);
-                vectorAttrs.put("DISTANCE_METRIC", "COSINE");
-
-                jedisPooled.ftCreate(INDEX_NAME,
-                        FTCreateParams.createParams()
-                                .on(IndexDataType.HASH)
-                                .addPrefix(KEY_PREFIX),
-                        TextField.of(TABLE_NAME_FIELD),
-                        NumericField.of(DATASOURCE_ID_FIELD),
-                        TextField.of(META_FIELD).noIndex(),
-                        VectorField.builder()
-                                .fieldName(VECTOR_FIELD)
-                                .algorithm(VectorField.VectorAlgorithm.HNSW)
-                                .attributes(vectorAttrs)
-                                .build()
-                );
-                log.info("RedisStack 索引 {} 创建成功，向量维度: {}", INDEX_NAME, dimension);
-            } catch (Exception ex) {
-                log.error("创建 RedisStack 索引失败: {}", ex.getMessage(), ex);
+            Map<String, Object> info = jedisPooled.ftInfo(INDEX_NAME);
+            // 检查现有索引的向量维度是否匹配
+            long existingDim = extractDimFromInfo(info);
+            if (existingDim > 0 && existingDim != dimension) {
+                log.warn("RedisStack 索引 {} 维度不匹配（现有: {}, 配置: {}），删除重建", INDEX_NAME, existingDim, dimension);
+                jedisPooled.ftDropIndex(INDEX_NAME);
+                createIndex();
+            } else {
+                log.info("RedisStack 索引 {} 已存在，维度: {}", INDEX_NAME, existingDim > 0 ? existingDim : "unknown");
             }
+        } catch (Exception e) {
+            log.info("RedisStack 索引 {} 不存在，开始创建", INDEX_NAME);
+            createIndex();
+        }
+    }
+
+    private long extractDimFromInfo(Map<String, Object> info) {
+        try {
+            // ftInfo 返回的 attributes 列表中找 vector 字段的 DIM
+            Object attrs = info.get("attributes");
+            if (attrs instanceof List) {
+                for (Object attr : (List<?>) attrs) {
+                    if (attr instanceof List) {
+                        List<?> attrList = (List<?>) attr;
+                        String attrStr = attrList.toString().toLowerCase();
+                        if (attrStr.contains("vector") && attrStr.contains("dim")) {
+                            int dimIdx = attrList.indexOf("DIM");
+                            if (dimIdx == -1) dimIdx = attrList.indexOf("dim");
+                            if (dimIdx >= 0 && dimIdx + 1 < attrList.size()) {
+                                return Long.parseLong(attrList.get(dimIdx + 1).toString());
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("解析索引维度失败: {}", e.getMessage());
+        }
+        return -1;
+    }
+
+    private void createIndex() {
+        try {
+            Map<String, Object> vectorAttrs = new HashMap<>();
+            vectorAttrs.put("TYPE", "FLOAT32");
+            vectorAttrs.put("DIM", dimension);
+            vectorAttrs.put("DISTANCE_METRIC", "COSINE");
+
+            jedisPooled.ftCreate(INDEX_NAME,
+                    FTCreateParams.createParams()
+                            .on(IndexDataType.HASH)
+                            .addPrefix(KEY_PREFIX),
+                    TextField.of(TABLE_NAME_FIELD),
+                    NumericField.of(DATASOURCE_ID_FIELD),
+                    TextField.of(META_FIELD).noIndex(),
+                    VectorField.builder()
+                            .fieldName(VECTOR_FIELD)
+                            .algorithm(VectorField.VectorAlgorithm.HNSW)
+                            .attributes(vectorAttrs)
+                            .build()
+            );
+            log.info("RedisStack 索引 {} 创建成功，向量维度: {}", INDEX_NAME, dimension);
+        } catch (Exception ex) {
+            log.error("创建 RedisStack 索引失败: {}", ex.getMessage(), ex);
         }
     }
 
@@ -146,8 +183,10 @@ public class SchemaVectorStoreService {
      * KNN 向量搜索，返回相关表结构列表
      */
     public List<SchemaSearchResult> searchSchemas(String query, Long datasourceId, int topK) {
+        log.info("开始 KNN 搜索: query={}, datasourceId={}, topK={}", query, datasourceId, topK);
         try {
             float[] queryEmbedding = embeddingService.generateEmbedding(query);
+            log.debug("Embedding 生成完成，维度: {}", queryEmbedding.length);
             byte[] queryVector = toFloat32Bytes(queryEmbedding);
 
             String queryStr;
@@ -157,6 +196,7 @@ public class SchemaVectorStoreService {
             } else {
                 queryStr = String.format("*=>[KNN %d @%s $BLOB AS score]", topK, VECTOR_FIELD);
             }
+            log.debug("KNN 查询语句: {}", queryStr);
 
             Query q = new Query(queryStr)
                     .addParam("BLOB", queryVector)
@@ -165,7 +205,9 @@ public class SchemaVectorStoreService {
                     .dialect(2);
 
             SearchResult result = jedisPooled.ftSearch(INDEX_NAME, q);
-            return result.getDocuments().stream()
+            log.info("KNN 搜索命中 {} 条结果", result.getDocuments().size());
+
+            List<SchemaSearchResult> results = result.getDocuments().stream()
                     .map(doc -> {
                         String metaJson = (String) doc.get(META_FIELD);
                         SchemaMeta meta = gson.fromJson(metaJson, SchemaMeta.class);
@@ -177,11 +219,22 @@ public class SchemaVectorStoreService {
                             } catch (NumberFormatException ignored) {
                             }
                         }
+                        log.debug("命中表: tableName={}, score={}", meta != null ? meta.getTableName() : "null", score);
                         return new SchemaSearchResult(meta, score);
                     })
                     .collect(Collectors.toList());
+
+            if (results.isEmpty()) {
+                log.warn("KNN 搜索无结果: query={}, datasourceId={}", query, datasourceId);
+            } else {
+                log.info("KNN 搜索结果: {}",
+                        results.stream()
+                                .map(r -> r.getMeta() != null ? r.getMeta().getTableName() + "(score=" + String.format("%.4f", r.getScore()) + ")" : "null")
+                                .collect(Collectors.joining(", ")));
+            }
+            return results;
         } catch (Exception e) {
-            log.error("KNN 搜索失败: query={}, error={}", query, e.getMessage(), e);
+            log.error("KNN 搜索失败: query={}, datasourceId={}, error={}", query, datasourceId, e.getMessage(), e);
             return Collections.emptyList();
         }
     }

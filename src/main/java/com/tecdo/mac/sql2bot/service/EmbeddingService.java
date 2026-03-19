@@ -47,12 +47,14 @@ public class EmbeddingService {
      */
     public float[] generateEmbedding(String text) {
         try {
-            log.debug("Generating embedding for text: {}", text.substring(0, Math.min(50, text.length())));
+            // all-minilm 最大 512 tokens，截断到 1000 字符保险
+            String truncated = text.length() > 1000 ? text.substring(0, 1000) : text;
+            log.debug("Generating embedding for text: {}", truncated.substring(0, Math.min(50, truncated.length())));
 
             // Ollama API 格式：{"model": "all-minilm", "prompt": "..."}
             JsonObject requestBody = new JsonObject();
             requestBody.addProperty("model", model);
-            requestBody.addProperty("prompt", text);
+            requestBody.addProperty("prompt", truncated);
 
             String url = baseUrl + "/api/embeddings";
             Request request = new Request.Builder()
