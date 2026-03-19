@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Embedding 服务
- * 使用 OpenAI API 生成文本的向量表示
+ * 使用 Ollama 本地模型生成文本的向量表示
  */
 @Slf4j
 @Service
@@ -24,10 +24,10 @@ public class EmbeddingService {
     @Value("${embedding.api.base-url}")
     private String baseUrl;
 
-    @Value("${embedding.api.key}")
-    private String apiKey;
+    @Value("${embedding.model:all-minilm}")
+    private String model;
 
-    @Value("${embedding.dimension:1024}")
+    @Value("${embedding.dimension:384}")
     private int dimension;
 
     private final OkHttpClient httpClient;
@@ -43,26 +43,24 @@ public class EmbeddingService {
     }
 
     /**
-     * 生成文本的 embedding 向量
+     * 生成文本的 embedding 向量（使用 Ollama API）
      */
     public float[] generateEmbedding(String text) {
         try {
             log.debug("Generating embedding for text: {}", text.substring(0, Math.min(50, text.length())));
 
-            // 构建请求
+            // Ollama API 格式：{"model": "all-minilm", "prompt": "..."}
             JsonObject requestBody = new JsonObject();
-            requestBody.addProperty("input", text);
-            requestBody.addProperty("model", "text-embedding-ada-002");
+            requestBody.addProperty("model", model);
+            requestBody.addProperty("prompt", text);
 
-            String url = baseUrl + "/v1/embeddings";
+            String url = baseUrl + "/api/embeddings";
             Request request = new Request.Builder()
                     .url(url)
                     .post(RequestBody.create(
                             requestBody.toString(),
                             MediaType.parse("application/json")
                     ))
-                    .addHeader("Authorization", "Bearer " + apiKey)
-                    .addHeader("Content-Type", "application/json")
                     .build();
 
             // 发送请求
@@ -75,14 +73,11 @@ public class EmbeddingService {
                 String responseBody = response.body().string();
                 JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
 
-                // 提取 embedding 向量
-                JsonArray data = jsonResponse.getAsJsonArray("data");
-                if (data.size() == 0) {
+                // Ollama 响应格式：{"embedding": [...]}
+                JsonArray embeddingArray = jsonResponse.getAsJsonArray("embedding");
+                if (embeddingArray == null || embeddingArray.size() == 0) {
                     throw new RuntimeException("No embedding data returned");
                 }
-
-                JsonArray embeddingArray = data.get(0).getAsJsonObject()
-                        .getAsJsonArray("embedding");
 
                 float[] embedding = new float[embeddingArray.size()];
                 for (int i = 0; i < embeddingArray.size(); i++) {
