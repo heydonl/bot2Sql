@@ -87,10 +87,22 @@ public class QueryLogService {
     }
 
     /**
+     * 根据模板ID从 query_log 表获取最高评分的问答对
+     */
+    public QueryLog getBestExampleByTemplateId(Long templateId) {
+        try {
+            log.debug("从 query_log 获取模板最佳问答示例: templateId={}", templateId);
+            return queryLogMapper.selectBestByTemplateId(templateId);
+        } catch (Exception e) {
+            log.error("从 query_log 获取模板最佳问答示例失败: templateId={}", templateId, e);
+            return null;
+        }
+    }
+
+    /**
      * 获取意图分布统计
      */
     public Map<String, Long> getIntentDistribution() {
-        log.debug("获取意图分布统计");
         return queryLogMapper.getIntentDistribution(null, null);
     }
 }
