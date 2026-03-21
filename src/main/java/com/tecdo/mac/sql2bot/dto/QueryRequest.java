@@ -32,4 +32,14 @@ public class QueryRequest {
      * 是否创建新会话（默认 false）
      */
     private Boolean createNewConversation;
+
+    /**
+     * 不满意重试时传入，指向上次查询的 queryLogId
+     */
+    private Long retryQueryLogId;
+
+    /**
+     * 用户是否满意上次结果（false 触发 BFS 重试路径）
+     */
+    private Boolean satisfied;
 }
