@@ -50,7 +50,6 @@ public class TextToSQLService {
     private final IntentFewShotService intentFewShotService;
 
     // RAG模板检索配置
-    private static final double TEMPLATE_SIMILARITY_THRESHOLD = 0.7;
     private static final int MAX_TEMPLATE_CANDIDATES = 5;
 
     // Schema 向量检索配置
@@ -96,14 +95,11 @@ public class TextToSQLService {
                 messageService.saveUserMessage(conversationId, request.getQuestion());
             }
 
-            // 4. 获取数据源ID
-            Long datasourceId = null;
-
             // 5. 路径3：用户不满意，直接走高召回 BFS 路径
             if (Boolean.FALSE.equals(request.getSatisfied()) && request.getRetryQueryLogId() != null) {
                 log.info("用户不满意，触发BFS高召回重试: queryLogId={}", request.getRetryQueryLogId());
-                String sql = generateSQLByBFSWithHighRecall(request.getQuestion(), datasourceId);
-                return executeAndRespond(request, conversationId, datasourceId, sql,
+                List<SqlStep> steps = generatePlanByBFSWithHighRecall(request.getQuestion());
+                return executePlan(request.getQuestion(), steps, conversationId, request,
                     null, false, 0.0, startTime);
             }
 
@@ -114,7 +110,7 @@ public class TextToSQLService {
             try {
                 List<TemplateVectorSearchService.TemplateSearchResult> templateResults =
                     templateVectorSearchService.searchSimilarTemplates(
-                        request.getQuestion(), datasourceId, MAX_TEMPLATE_CANDIDATES);
+                        request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
                 if (!templateResults.isEmpty()) {
                     TemplateVectorSearchService.TemplateSearchResult bestMatch = templateResults.get(0);
                     templateSimilarity = bestMatch.getSimilarity();
@@ -133,23 +129,24 @@ public class TextToSQLService {
 
             if (matchedTemplate != null) {
                 try {
-                    String parameterPrompt = buildParameterGenerationPrompt(matchedTemplate, request.getQuestion());
-                    String parameterResponse = aiService.generateParameters(parameterPrompt);
-                    String sql = templateParameterService.fillTemplateWithLLMParameters(matchedTemplate, parameterResponse);
-                    Long templateId = matchedTemplate.getId();
-                    queryTemplateService.incrementUsageCount(templateId);
-                    log.info("路径1 模板填充成功: templateId={}, sql={}", templateId, sql);
-                    return executeAndRespond(request, conversationId, datasourceId, sql,
-                        templateId, true, templateSimilarity, startTime);
+                    List<SqlStep> steps = parseSqlSteps(matchedTemplate.getSqlTemplate());
+                    if (steps == null) {
+                        log.warn("路径1 模板解析失败，降级到路径2: templateId={}", matchedTemplate.getId());
+                    } else {
+                        queryTemplateService.incrementUsageCount(matchedTemplate.getId());
+                        log.info("路径1 模板解析成功: templateId={}, steps={}", matchedTemplate.getId(), steps.size());
+                        return executePlan(request.getQuestion(), steps, conversationId, request,
+                            matchedTemplate.getId(), true, templateSimilarity, startTime);
+                    }
                 } catch (Exception e) {
-                    log.error("路径1 模板填充失败，降级到路径2", e);
+                    log.error("路径1 处理失败，降级到路径2", e);
                 }
             }
 
             // 7. 路径2：Schema RAG + BFS扩表 + LLM
             log.info("进入路径2: Schema RAG + BFS扩表 + LLM");
-            String sql = generateSQLByBFSNormal(request.getQuestion(), datasourceId);
-            return executeAndRespond(request, conversationId, datasourceId, sql,
+            List<SqlStep> steps = generatePlanByBFSNormal(request.getQuestion());
+            return executePlan(request.getQuestion(), steps, conversationId, request,
                 null, false, 0.0, startTime);
 
         } catch (Exception e) {
@@ -468,88 +465,12 @@ public class TextToSQLService {
         return response;
     }
 
-    private QueryResponse executeAndRespond(QueryRequest request, Long conversationId,
-            Long datasourceId, String sql, Long templateId,
-            boolean isFromTemplate, double templateSimilarity, long startTime) {
-
-        if (sql == null) {
-            String errMsg = "SQL生成失败，无法执行查询";
-            if (conversationId != null) messageService.saveErrorMessage(conversationId, errMsg);
-            return QueryResponse.error(errMsg);
-        }
-
-        // 推断数据源
-        if (datasourceId == null) {
-            datasourceId = semanticContextService.inferDataSourceFromSQL(sql);
-            if (datasourceId == null) {
-                String errMsg = "无法从 SQL 中推断出数据源，请检查表名是否正确";
-                if (conversationId != null) messageService.saveErrorMessage(conversationId, errMsg);
-                return QueryResponse.error(errMsg);
-            }
-        }
-
-        String explanation = isFromTemplate ? "通过模板匹配生成查询" : "通过BFS表发现生成查询";
-
-        long executionStart = System.currentTimeMillis();
-        boolean executionSuccess = false;
-        int resultCount = 0;
-        List<Map<String, Object>> data = null;
-        String errorMessage = null;
-
-        try {
-            data = queryExecutorService.executeQuery(datasourceId, sql);
-            resultCount = data.size();
-            executionSuccess = true;
-            log.info("SQL执行成功: resultCount={}", resultCount);
-        } catch (Exception e) {
-            errorMessage = e.getMessage();
-            log.error("SQL执行失败", e);
-        }
-
-        long executionTime = System.currentTimeMillis() - executionStart;
-
-        Long queryLogId = null;
-        try {
-            QueryLog queryLog = new QueryLog();
-            queryLog.setUserId(request.getUserId());
-            queryLog.setConversationId(conversationId);
-            queryLog.setQuestion(request.getQuestion());
-            queryLog.setTemplateId(templateId);
-            queryLog.setIsFromTemplate(isFromTemplate);
-            queryLog.setGeneratedSql(sql);
-            queryLog.setExecutionSuccess(executionSuccess);
-            queryLog.setExecutionTime(executionTime);
-            queryLog.setResultCount(resultCount);
-            queryLog.setDatasourceId(datasourceId);
-            queryLogId = queryLogService.logQuery(queryLog);
-        } catch (Exception e) {
-            log.warn("记录查询日志失败（不影响查询结果）", e);
-        }
-
-        if (!executionSuccess) {
-            if (conversationId != null) messageService.saveErrorMessage(conversationId, errorMessage);
-            return QueryResponse.error("SQL 执行失败: " + errorMessage);
-        }
-
-        long totalTime = System.currentTimeMillis() - startTime;
-        if (conversationId != null) {
-            messageService.saveAssistantMessage(conversationId, explanation, sql, data);
-        }
-
-        QueryResponse response = QueryResponse.success(conversationId, sql, explanation, data, totalTime);
-        response.setQueryLogId(queryLogId);
-        response.setTemplateId(templateId);
-        response.setFromTemplate(isFromTemplate);
-        response.setTemplateSimilarity(templateSimilarity);
-        return response;
-    }
-
     /**
-     * 路径2：正常召回 + 相似度过滤 + BFS扩表 + LLM
+     * 路径2：正常召回 + 相似度过滤 + BFS扩表 + LLM 生成执行计划
      */
-    private String generateSQLByBFSNormal(String question, Long datasourceId) {
+    private List<SqlStep> generatePlanByBFSNormal(String question) {
         List<SchemaVectorStoreService.SchemaSearchResult> schemaResults =
-            schemaVectorStoreService.searchSchemas(question, datasourceId, schemaSearchTopK);
+            schemaVectorStoreService.searchSchemas(question, null, schemaSearchTopK);
         Set<Long> seedModelIds = schemaResults.stream()
             .filter(r -> r.getScore() >= schemaSearchSimilarityThreshold)
             .filter(r -> r.getMeta() != null && r.getMeta().getModelId() != null)
@@ -558,25 +479,26 @@ public class TextToSQLService {
         if (seedModelIds.isEmpty()) {
             log.warn("路径2: Schema RAG 无种子表，降级到语义上下文");
             try {
-                String sysPrompt = semanticContextService.generateSystemPrompt(datasourceId, question);
+                String sysPrompt = semanticContextService.generateSystemPrompt(null, question);
                 String aiResp = aiService.generateSQL(sysPrompt,
                     semanticContextService.generateUserPrompt(question));
-                return aiService.extractSQL(aiResp);
+                String sql = aiService.extractSQL(aiResp);
+                return sql != null ? List.of(new SqlStep(sql, null)) : null;
             } catch (Exception e) {
                 log.error("路径2 语义上下文降级失败", e);
                 return null;
             }
         }
         Set<Long> allModelIds = expandByBFS(seedModelIds, 2);
-        return generateSQLWithBFSContext(question, allModelIds, datasourceId);
+        return generatePlanWithBFSContext(question, allModelIds);
     }
 
     /**
-     * 路径3：高召回（不做相似度过滤）+ BFS扩表 + LLM
+     * 路径3：高召回（不做相似度过滤）+ BFS扩表 + LLM 生成执行计划
      */
-    private String generateSQLByBFSWithHighRecall(String question, Long datasourceId) {
+    private List<SqlStep> generatePlanByBFSWithHighRecall(String question) {
         List<SchemaVectorStoreService.SchemaSearchResult> schemaResults =
-            schemaVectorStoreService.searchSchemas(question, datasourceId, schemaSearchBfsRetryTopK);
+            schemaVectorStoreService.searchSchemas(question, null, schemaSearchBfsRetryTopK);
         Set<Long> seedModelIds = schemaResults.stream()
             .filter(r -> r.getMeta() != null && r.getMeta().getModelId() != null)
             .map(r -> r.getMeta().getModelId())
@@ -586,7 +508,7 @@ public class TextToSQLService {
             return null;
         }
         Set<Long> allModelIds = expandByBFS(seedModelIds, 2);
-        return generateSQLWithBFSContext(question, allModelIds, datasourceId);
+        return generatePlanWithBFSContext(question, allModelIds);
     }
 
     /**
@@ -620,10 +542,9 @@ public class TextToSQLService {
     }
 
     /**
-     * 根据 modelId 集合构建完整上下文并调用 LLM 生成 SQL
+     * 根据 modelId 集合构建完整上下文，调用 LLM 生成多步骤执行计划
      */
-    private String generateSQLWithBFSContext(String question, Set<Long> modelIds,
-                                              Long datasourceId) {
+    private List<SqlStep> generatePlanWithBFSContext(String question, Set<Long> modelIds) {
         try {
             List<com.tecdo.mac.sql2bot.domain.Model> models = new ArrayList<>();
             Map<Long, List<com.tecdo.mac.sql2bot.domain.ColumnDefinition>> columnsMap = new HashMap<>();
@@ -640,17 +561,16 @@ public class TextToSQLService {
                               || modelIds.contains(r.getToModelId()))
                     .collect(java.util.stream.Collectors.toList());
 
-            String fewShot = intentFewShotService.getFewShotExamples(datasourceId, question);
+            String fewShot = intentFewShotService.getFewShotExamples(null, question);
 
             StringBuilder systemPrompt = new StringBuilder();
-            systemPrompt.append("你是一个SQL生成专家。根据以下数据库结构和问答示例，为用户问题生成标准MySQL SQL。\n\n");
-            systemPrompt.append("## 用户问题\n").append(question).append("\n\n");
+            systemPrompt.append("你是一个SQL生成专家。根据以下数据库结构，为用户问题生成多步骤SQL执行计划。\n\n");
 
             systemPrompt.append("## 数据库表结构\n");
             for (com.tecdo.mac.sql2bot.domain.Model m : models) {
                 systemPrompt.append("### ").append(m.getTableName());
                 if (m.getDisplayName() != null) systemPrompt.append(" (").append(m.getDisplayName()).append(")");
-                systemPrompt.append("\n");
+                systemPrompt.append(" (datasource_id: ").append(m.getDatasourceId()).append(")\n");
                 if (m.getDescription() != null) systemPrompt.append("描述: ").append(m.getDescription()).append("\n");
                 systemPrompt.append("字段:\n");
                 List<com.tecdo.mac.sql2bot.domain.ColumnDefinition> cols = columnsMap.get(m.getId());
@@ -686,15 +606,31 @@ public class TextToSQLService {
                 systemPrompt.append("## 参考示例\n").append(fewShot).append("\n\n");
             }
 
-            systemPrompt.append("## 要求\n只返回SQL语句，不要额外解释。确保SQL语法正确，使用合适的JOIN和WHERE条件。\n");
+            systemPrompt.append("## 输出要求\n");
+            systemPrompt.append("返回JSON数组，每个元素格式: {\"sql_template\": \"...\", \"datasource_id\": N}\n");
+            systemPrompt.append("- 使用 {{param_name}} 表示依赖用户输入或上一步查询结果的动态值\n");
+            systemPrompt.append("- datasource_id 必须与表所属的数据源一致\n");
+            systemPrompt.append("- 如只需一步，也返回只含一个元素的数组\n");
+            systemPrompt.append("- 只返回JSON数组，不要额外解释\n");
 
-            // system prompt 包含完整上下文，user prompt 只传问题
             String llmResponse = aiService.generateSQL(systemPrompt.toString(), question);
-            String sql = aiService.extractSQL(llmResponse);
-            log.info("BFS上下文LLM生成SQL成功: {}", sql);
-            return sql;
+
+            // 提取 JSON 数组
+            String jsonStr = extractJsonBlock(llmResponse);
+            if (jsonStr == null) {
+                // 尝试直接解析整个响应
+                jsonStr = llmResponse.trim();
+            }
+
+            List<SqlStep> steps = parseSqlSteps(jsonStr);
+            if (steps == null || steps.isEmpty()) {
+                log.error("BFS上下文LLM生成执行计划失败，无法解析JSON: {}", llmResponse);
+                return null;
+            }
+            log.info("BFS上下文LLM生成执行计划成功: steps={}", steps.size());
+            return steps;
         } catch (Exception e) {
-            log.error("BFS上下文LLM生成SQL失败: question={}", question, e);
+            log.error("BFS上下文LLM生成执行计划失败: question={}", question, e);
             return null;
         }
     }
