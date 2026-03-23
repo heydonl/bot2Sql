@@ -9,11 +9,6 @@ import lombok.Data;
 public class QueryRequest {
 
     /**
-     * 数据源ID（可选，不指定则自动选择）
-     */
-    private Long datasourceId;
-
-    /**
      * 自然语言问题
      */
     private String question;
