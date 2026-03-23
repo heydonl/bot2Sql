@@ -130,29 +130,11 @@ public class SchemaVectorStoreService {
      */
     public void indexModel(Model model, List<ColumnDefinition> columns, String datasourceName) {
         try {
-            // 构建用于 embedding 的文本
-            StringBuilder textBuilder = new StringBuilder();
-            textBuilder.append("表名: ").append(model.getTableName());
-            if (model.getDisplayName() != null) {
-                textBuilder.append(" 显示名: ").append(model.getDisplayName());
-            }
-            if (model.getDescription() != null) {
-                textBuilder.append(" 描述: ").append(model.getDescription());
-            }
-            if (columns != null) {
-                for (ColumnDefinition col : columns) {
-                    textBuilder.append(" 字段: ").append(col.getColumnName());
-                    if (col.getDisplayName() != null) {
-                        textBuilder.append("(").append(col.getDisplayName()).append(")");
-                    }
-                    if (col.getDescription() != null) {
-                        textBuilder.append(" ").append(col.getDescription());
-                    }
-                }
-            }
+            // 构建用于 embedding 的文本（仅使用描述）
+            String embeddingText = model.getDescription() != null ? model.getDescription() : "";
 
             // 生成 embedding
-            float[] embedding = embeddingService.generateEmbedding(textBuilder.toString());
+            float[] embedding = embeddingService.generateEmbedding(embeddingText);
 
             // 构建 SchemaMeta
             SchemaMeta meta = buildSchemaMeta(model, columns, datasourceName);
@@ -211,16 +193,17 @@ public class SchemaVectorStoreService {
                     .map(doc -> {
                         String metaJson = (String) doc.get(META_FIELD);
                         SchemaMeta meta = gson.fromJson(metaJson, SchemaMeta.class);
-                        double score = 0.0;
+                        double similarity = 0.0;
                         Object scoreObj = doc.get("score");
                         if (scoreObj != null) {
                             try {
-                                score = Double.parseDouble(scoreObj.toString());
+                                double cosineDistance = Double.parseDouble(scoreObj.toString());
+                                similarity = 1.0 - cosineDistance / 2.0;
                             } catch (NumberFormatException ignored) {
                             }
                         }
-                        log.debug("命中表: tableName={}, score={}", meta != null ? meta.getTableName() : "null", score);
-                        return new SchemaSearchResult(meta, score);
+                        log.debug("命中表: tableName={}, similarity={}", meta != null ? meta.getTableName() : "null", similarity);
+                        return new SchemaSearchResult(meta, similarity);
                     })
                     .collect(Collectors.toList());
 
@@ -229,7 +212,7 @@ public class SchemaVectorStoreService {
             } else {
                 log.info("KNN 搜索结果: {}",
                         results.stream()
-                                .map(r -> r.getMeta() != null ? r.getMeta().getTableName() + "(score=" + String.format("%.4f", r.getScore()) + ")" : "null")
+                                .map(r -> r.getMeta() != null ? r.getMeta().getTableName() + "(similarity=" + String.format("%.4f", r.getScore()) + ")" : "null")
                                 .collect(Collectors.joining(", ")));
             }
             return results;
