@@ -7,6 +7,7 @@ import com.tecdo.mac.sql2bot.domain.QueryLog;
 import com.tecdo.mac.sql2bot.domain.QueryTemplate;
 import com.tecdo.mac.sql2bot.dto.QueryRequest;
 import com.tecdo.mac.sql2bot.dto.QueryResponse;
+import com.tecdo.mac.sql2bot.dto.SqlStep;
 import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisRequest;
 import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisResponse;
 import lombok.RequiredArgsConstructor;
@@ -84,7 +85,7 @@ public class TextToSQLService {
                 Conversation conversation = conversationService.create(
                     request.getUserId(),
                     generateConversationTitle(request.getQuestion()),
-                    request.getDatasourceId()
+                    null
                 );
                 conversationId = conversation.getId();
                 log.info("Created new conversation: id={}, userId={}", conversationId, request.getUserId());
@@ -96,7 +97,7 @@ public class TextToSQLService {
             }
 
             // 4. 获取数据源ID
-            Long datasourceId = request.getDatasourceId();
+            Long datasourceId = null;
 
             // 5. 路径3：用户不满意，直接走高召回 BFS 路径
             if (Boolean.FALSE.equals(request.getSatisfied()) && request.getRetryQueryLogId() != null) {
@@ -284,6 +285,187 @@ public class TextToSQLService {
             return question;
         }
         return question.substring(0, 27) + "...";
+    }
+
+    /**
+     * 解析 sqlTemplate 字段为 SqlStep 列表
+     * 支持 JSON 数组格式和旧版单条 SQL 字符串（向后兼容）
+     */
+    private List<SqlStep> parseSqlSteps(String sqlTemplate) {
+        if (sqlTemplate == null || sqlTemplate.isBlank()) return null;
+        try {
+            JsonNode node = objectMapper.readTree(sqlTemplate);
+            if (node.isArray()) {
+                List<SqlStep> steps = new ArrayList<>();
+                for (JsonNode item : node) {
+                    SqlStep step = new SqlStep();
+                    step.setSqlTemplate(item.path("sql_template").asText(null));
+                    step.setDatasourceId(item.has("datasource_id") && !item.get("datasource_id").isNull()
+                        ? item.get("datasource_id").asLong() : null);
+                    steps.add(step);
+                }
+                return steps.isEmpty() ? null : steps;
+            }
+        } catch (Exception ignored) {}
+        // 向后兼容：旧版单条 SQL 字符串
+        String upper = sqlTemplate.trim().toUpperCase();
+        if (upper.startsWith("SELECT") || upper.startsWith("WITH")) {
+            SqlStep step = new SqlStep(sqlTemplate, null);
+            return List.of(step);
+        }
+        return null;
+    }
+
+    /**
+     * 构建参数填充 Prompt（per-step）
+     */
+    private String buildParamFillingPrompt(String question, String sqlTemplate,
+                                            List<Map<String, Object>> prevResult,
+                                            QueryLog example) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是一个SQL参数填充专家。根据以下信息，将SQL模板中的{{param}}占位符替换为具体值。\n\n");
+        sb.append("SQL模板:\n").append(sqlTemplate).append("\n\n");
+
+        if (prevResult != null && !prevResult.isEmpty()) {
+            List<Map<String, Object>> truncated = prevResult.size() > 100
+                ? prevResult.subList(0, 100) : prevResult;
+            try {
+                sb.append("上一步查询结果（最多100行）:\n")
+                  .append(objectMapper.writeValueAsString(truncated)).append("\n\n");
+            } catch (Exception e) {
+                sb.append("上一步查询结果: (序列化失败)\n\n");
+            }
+        } else {
+            sb.append("上一步查询结果: 无\n\n");
+        }
+
+        if (example != null) {
+            sb.append("参考示例（高评分历史问答）:\n");
+            sb.append("问题: ").append(example.getQuestion()).append("\n");
+            sb.append("SQL: ").append(example.getGeneratedSql()).append("\n\n");
+        }
+
+        sb.append("用户问题:\n").append(question).append("\n\n");
+        sb.append("要求：只返回填充完成的SQL语句，不要额外解释。");
+        return sb.toString();
+    }
+
+    /**
+     * 顺序执行多步骤 SQL 计划
+     */
+    private QueryResponse executePlan(String question, List<SqlStep> steps,
+            Long conversationId, QueryRequest request,
+            Long templateId, boolean isFromTemplate,
+            double templateSimilarity, long startTime) {
+
+        if (steps == null || steps.isEmpty()) {
+            String err = "执行计划为空";
+            if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
+            return QueryResponse.error(err);
+        }
+
+        String explanation = isFromTemplate ? "通过模板匹配生成查询" : "通过BFS表发现生成查询";
+        List<Map<String, Object>> prevResult = null;
+        String lastFilledSql = null;
+        Long lastDatasourceId = null;
+
+        for (SqlStep step : steps) {
+            // 获取参考示例
+            QueryLog example = null;
+            try {
+                example = queryLogService.getBestRecentExample(step.getDatasourceId());
+            } catch (Exception e) {
+                log.warn("获取参考示例失败，跳过: {}", e.getMessage());
+            }
+
+            // LLM 填充参数
+            String filledSql;
+            try {
+                String prompt = buildParamFillingPrompt(question, step.getSqlTemplate(), prevResult, example);
+                String llmResp = aiService.generateSQL(prompt, "请填充SQL模板中的参数。");
+                filledSql = aiService.extractSQL(llmResp);
+                if (filledSql == null || filledSql.isBlank()) {
+                    filledSql = llmResp.trim(); // fallback: use raw response
+                }
+            } catch (Exception e) {
+                log.error("LLM参数填充失败: step={}", step.getSqlTemplate(), e);
+                String err = "SQL参数填充失败: " + e.getMessage();
+                if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
+                return QueryResponse.error(err);
+            }
+
+            // 推断数据源
+            Long datasourceId = step.getDatasourceId();
+            if (datasourceId == null) {
+                datasourceId = semanticContextService.inferDataSourceFromSQL(filledSql);
+            }
+            if (datasourceId == null) {
+                String err = "无法推断数据源，请检查SQL中的表名";
+                if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
+                return QueryResponse.error(err);
+            }
+
+            // 执行 SQL
+            long execStart = System.currentTimeMillis();
+            try {
+                prevResult = queryExecutorService.executeQuery(datasourceId, filledSql);
+                lastFilledSql = filledSql;
+                lastDatasourceId = datasourceId;
+                log.info("步骤执行成功: sql={}, rows={}", filledSql, prevResult.size());
+            } catch (Exception e) {
+                log.error("步骤执行失败: sql={}", filledSql, e);
+                // 记录失败日志
+                try {
+                    QueryLog queryLog = new QueryLog();
+                    queryLog.setUserId(request.getUserId());
+                    queryLog.setConversationId(conversationId);
+                    queryLog.setQuestion(question);
+                    queryLog.setTemplateId(templateId);
+                    queryLog.setIsFromTemplate(isFromTemplate);
+                    queryLog.setGeneratedSql(filledSql);
+                    queryLog.setExecutionSuccess(false);
+                    queryLog.setExecutionTime(System.currentTimeMillis() - execStart);
+                    queryLog.setDatasourceId(datasourceId);
+                    queryLogService.logQuery(queryLog);
+                } catch (Exception logEx) {
+                    log.warn("记录失败日志异常", logEx);
+                }
+                String err = "SQL执行失败: " + e.getMessage();
+                if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
+                return QueryResponse.error(err);
+            }
+        }
+
+        // 记录成功日志
+        Long queryLogId = null;
+        try {
+            QueryLog queryLog = new QueryLog();
+            queryLog.setUserId(request.getUserId());
+            queryLog.setConversationId(conversationId);
+            queryLog.setQuestion(question);
+            queryLog.setTemplateId(templateId);
+            queryLog.setIsFromTemplate(isFromTemplate);
+            queryLog.setGeneratedSql(lastFilledSql);
+            queryLog.setExecutionSuccess(true);
+            queryLog.setResultCount(prevResult.size());
+            queryLog.setDatasourceId(lastDatasourceId);
+            queryLog.setExecutionTime(System.currentTimeMillis() - startTime);
+            queryLogId = queryLogService.logQuery(queryLog);
+        } catch (Exception e) {
+            log.warn("记录查询日志失败（不影响查询结果）", e);
+        }
+
+        if (conversationId != null) {
+            messageService.saveAssistantMessage(conversationId, explanation, lastFilledSql, prevResult);
+        }
+
+        long totalTime = System.currentTimeMillis() - startTime;
+        QueryResponse response = QueryResponse.success(conversationId, lastFilledSql, explanation, prevResult, totalTime);
+        response.setQueryLogId(queryLogId);
+        response.setTemplateId(templateId);
+        response.setFromTemplate(isFromTemplate);
+        response.setTemplateSimilarity(templateSimilarity);
+        return response;
     }
 
     private QueryResponse executeAndRespond(QueryRequest request, Long conversationId,
