@@ -83,8 +83,8 @@ git commit -m "feat: add SqlStep DTO for multi-step SQL execution"
 - [ ] **Step 1: Add method to QueryLogMapper interface**
 
 ```java
-// Add to QueryLogMapper.java after line 52
-QueryLog selectBestRecentExample(
+// Add to QueryLogMapper.java after line 52 — return type is List<QueryLog>
+List<QueryLog> selectBestRecentExample(
     @Param("datasourceId") Long datasourceId,
     @Param("limit") int limit
 );
@@ -130,6 +130,8 @@ git commit -m "feat: add QueryLog best recent example query for param-filling pr
 
 **Files:**
 - Modify: `src/main/java/com/tecdo/mac/sql2bot/domain/QueryTemplate.java:22`
+
+**Note: Must be done AFTER Task 5 (TemplateVectorSearchService fix), since Task 5 Step 3 removes a call to `template.getDatasourceId()`. If Task 3 runs first, Task 5 Step 3 will fail to compile.**
 
 - [ ] **Step 1: Remove datasourceId field**
 
@@ -228,7 +230,13 @@ With:
 null
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 6: Update ConversationManagementService — pass null for datasourceId**
+
+In `ConversationManagementService.java` line 40, replace `request.getDatasourceId()` with `null`.
+
+Note: `TextToSQLService` also has a `conversationService.create(..., request.getDatasourceId())` call at line ~87 — that is handled in Task 10 Step 1 as part of the full processQuery rewrite.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/main/java/com/tecdo/mac/sql2bot/service/ConversationManagementService.java
@@ -344,9 +352,13 @@ git commit -m "refactor: drop datasource_id column from query_template table"
 
 This task adds the `executePlan` method and the `parseSqlSteps` helper. The existing `executeAndRespond` method is replaced.
 
-- [ ] **Step 1: Add import for SqlStep and List at top of file (already imported java.util.List)**
+- [ ] **Step 1: Add import for SqlStep and verify JsonNode import**
 
-Verify `import com.tecdo.mac.sql2bot.dto.SqlStep;` is present. Add if missing.
+Verify these imports exist at the top of `TextToSQLService.java`. Add if missing:
+```java
+import com.tecdo.mac.sql2bot.dto.SqlStep;
+import tools.jackson.databind.JsonNode;  // NOTE: use tools.jackson, NOT com.fasterxml.jackson
+```
 
 - [ ] **Step 2: Add parseSqlSteps helper method**
 
@@ -572,12 +584,20 @@ Replace the conversation creation block (lines 83-91):
 }
 ```
 
-- [ ] **Step 2: Remove datasourceId local variable (line 99)**
+- [ ] **Step 2: Remove datasourceId local variable AND update searchSimilarTemplates call in one edit**
 
-Remove:
+In `processQuery`, remove line 99:
 ```java
 Long datasourceId = request.getDatasourceId();
 ```
+
+And in the same edit, update the `searchSimilarTemplates` call (previously used `datasourceId`):
+```java
+templateVectorSearchService.searchSimilarTemplates(
+    request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
+```
+
+Also remove the `TEMPLATE_SIMILARITY_THRESHOLD` constant (line 52) — it has no references in method bodies and can be safely deleted.
 
 - [ ] **Step 3: Update Path 3 — remove datasourceId parameter**
 
@@ -632,21 +652,7 @@ return executePlan(request.getQuestion(), steps, conversationId, request,
     null, false, 0.0, startTime);
 ```
 
-- [ ] **Step 6: Update searchSimilarTemplates call — pass null for datasourceId**
-
-Replace:
-```java
-templateVectorSearchService.searchSimilarTemplates(
-    request.getQuestion(), datasourceId, MAX_TEMPLATE_CANDIDATES);
-```
-
-With:
-```java
-templateVectorSearchService.searchSimilarTemplates(
-    request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
-```
-
-- [ ] **Step 7: Rename generateSQLByBFSNormal → generatePlanByBFSNormal, return List\<SqlStep\>**
+- [ ] **Step 6: Rename generateSQLByBFSNormal → generatePlanByBFSNormal, return List\<SqlStep\>**
 
 Replace the entire `generateSQLByBFSNormal` method:
 
@@ -835,9 +841,11 @@ git commit -m "feat: refactor processQuery to multi-step SQL execution with exec
 Expected: BUILD SUCCESS with no errors.
 
 If errors appear, fix them before proceeding. Common issues:
-- Missing imports for `SqlStep`
+- Missing imports for `SqlStep` or `tools.jackson.databind.JsonNode`
 - Remaining references to removed `datasourceId` fields
 - `selectBestRecentExample` returning `List<QueryLog>` — ensure `QueryLogMapper.selectBestRecentExample` returns `List<QueryLog>` (not single object)
+- `QueryTemplateMapper.java` — verify no `datasourceId` params remain (the interface has no datasourceId params currently, but confirm after XML changes)
+- `QueryTemplateMapper.xml` — confirm `datasource_id` removed from resultMap, INSERT columns, and INSERT values
 
 - [ ] **Step 2: Commit any compile fixes**
 
