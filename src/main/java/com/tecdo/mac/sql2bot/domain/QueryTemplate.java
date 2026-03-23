@@ -19,7 +19,6 @@ public class QueryTemplate {
     private BigDecimal score;
     private Integer ratingCount;
     private Integer usageCount;
-    private Long datasourceId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

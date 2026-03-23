@@ -136,7 +136,6 @@ public class QueryTemplateService {
             template.setSqlTemplate(sqlTemplate);
             template.setIntent(intent);
             template.setEntity(entity);
-            template.setDatasourceId(datasourceId);
 
             // 序列化 dimensions 为 JSON
             if (dimensions != null && !dimensions.isEmpty()) {
@@ -220,5 +219,36 @@ public class QueryTemplateService {
             log.error("解析指标 JSON 失败: {}", metricsJson, e);
             return List.of();
         }
+    }
+
+    /**
+     * 根据ID获取模板
+     */
+    public QueryTemplate getById(Long templateId) {
+        return templateMapper.selectById(templateId);
+    }
+
+    /**
+     * 获取所有模板
+     */
+    public List<QueryTemplate> listAll() {
+        return templateMapper.selectAll();
+    }
+
+    /**
+     * 更新模板
+     */
+    @Transactional
+    public void updateTemplate(QueryTemplate template) {
+        templateMapper.updateById(template);
+    }
+
+    /**
+     * 保存模板
+     */
+    @Transactional
+    public QueryTemplate saveTemplate(QueryTemplate template) {
+        templateMapper.insert(template);
+        return template;
     }
 }
