@@ -105,4 +105,12 @@ public class QueryLogService {
     public Map<String, Long> getIntentDistribution() {
         return queryLogMapper.getIntentDistribution(null, null);
     }
+
+    /**
+     * 获取最近的高评分查询示例（用于参数填充提示词）
+     */
+    public QueryLog getBestRecentExample(Long datasourceId) {
+        List<QueryLog> results = queryLogMapper.selectBestRecentExample(datasourceId, 1);
+        return results.isEmpty() ? null : results.get(0);
+    }
 }

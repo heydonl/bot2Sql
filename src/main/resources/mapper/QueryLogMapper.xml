@@ -18,6 +18,7 @@
         <result column="execution_time" property="executionTime"/>
         <result column="result_count" property="resultCount"/>
         <result column="rating" property="rating"/>
+        <result column="score" property="score"/>
         <result column="is_labeled" property="isLabeled"/>
         <result column="datasource_id" property="datasourceId"/>
         <result column="created_at" property="createdAt"/>
@@ -123,6 +124,15 @@
         ORDER BY count DESC
     </select>
 
+    <select id="selectBestByTemplateId" resultMap="BaseResultMap">
+        SELECT * FROM query_log
+        WHERE template_id = #{templateId}
+          AND generated_sql IS NOT NULL
+          AND execution_success = TRUE
+        ORDER BY score DESC, rating DESC
+        LIMIT 1
+    </select>
+
     <select id="getStats" resultType="com.tecdo.mac.sql2bot.dto.QueryLogStats">
         SELECT
             COUNT(*) as totalQueries,
@@ -135,6 +145,19 @@
             SUM(CASE WHEN is_labeled = TRUE THEN 1 ELSE 0 END) as labeledCount,
             SUM(CASE WHEN is_labeled = FALSE OR is_labeled IS NULL THEN 1 ELSE 0 END) as unlabeledCount
         FROM query_log
+    </select>
+
+
+    <select id="selectBestRecentExample" resultMap="BaseResultMap">
+        SELECT * FROM query_log
+        WHERE execution_success = TRUE
+          AND rating >= 4
+          AND generated_sql IS NOT NULL
+          <if test="datasourceId != null">
+              AND datasource_id = #{datasourceId}
+          </if>
+        ORDER BY rating DESC, created_at DESC
+        LIMIT #{limit}
     </select>
 
 </mapper>
