@@ -103,6 +103,22 @@ public class ModelService {
     }
 
     /**
+     * 根据数据库名和表名查找Model
+     */
+    public Model getByDatabaseAndTableName(String databaseName, String tableName) {
+        if (databaseName == null || tableName == null) {
+            return null;
+        }
+
+        try {
+            return modelMapper.findByDatabaseAndTableName(databaseName, tableName);
+        } catch (Exception e) {
+            log.warn("根据数据库名和表名查找Model失败: database={}, table={}", databaseName, tableName, e);
+            return null;
+        }
+    }
+
+    /**
      * 查询可见的模型
      */
     public List<Model> listVisible() {

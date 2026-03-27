@@ -68,4 +68,9 @@ public interface ModelMapper {
      * 查询所有 model（含 datasource 信息）
      */
     List<Model> selectAllWithDatasource();
+
+    /**
+     * 根据数据库名和表名查找Model
+     */
+    Model findByDatabaseAndTableName(@Param("databaseName") String databaseName, @Param("tableName") String tableName);
 }
