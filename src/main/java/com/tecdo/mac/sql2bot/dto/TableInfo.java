@@ -1,36 +1,19 @@
 package com.tecdo.mac.sql2bot.dto;
 
 import lombok.Data;
-import java.util.List;
 
 /**
- * 表信息 DTO
+ * 表信息辅助类，用于解析intent_sql中的tables数组
  */
 @Data
 public class TableInfo {
+    private String name;
+    private String database;
 
-    /**
-     * 数据库名
-     */
-    private String databaseName;
+    public TableInfo() {}
 
-    /**
-     * 表名
-     */
-    private String tableName;
-
-    /**
-     * 表注释
-     */
-    private String tableComment;
-
-    /**
-     * 表类型（TABLE, VIEW）
-     */
-    private String tableType;
-
-    /**
-     * 字段列表
-     */
-    private List<ColumnInfo> columns;
+    public TableInfo(String name, String database) {
+        this.name = name;
+        this.database = database;
+    }
 }
