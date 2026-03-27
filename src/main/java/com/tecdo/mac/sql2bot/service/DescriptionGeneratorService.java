@@ -461,7 +461,7 @@ public class DescriptionGeneratorService {
             return false;
         }
         int length = description.length();
-        return length >= 20 && length <= 200; // 20-200字符范围
+        return length >= 50 && length <= 600; // 50-600字符范围
     }
 
     /**
@@ -472,7 +472,7 @@ public class DescriptionGeneratorService {
      * @return [systemPrompt, userPrompt]
      */
     private String[] buildPrompt(Model model, List<ColumnDefinition> columns) {
-        String systemPrompt = "你是一个数据库业务分析专家。根据以下表结构信息，生成一段简洁的中文业务描述（100-200字），" +
+        String systemPrompt = "你是一个数据库业务分析专家。根据以下表结构信息，生成一段简洁的中文业务描述（200-300字），" +
                              "描述该表的业务用途、存储的核心数据和主要使用场景。只输出描述文字，不要加任何前缀或解释。";
 
         StringBuilder userPrompt = new StringBuilder();

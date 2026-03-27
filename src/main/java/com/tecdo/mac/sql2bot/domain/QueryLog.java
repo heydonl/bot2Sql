@@ -19,6 +19,7 @@ public class QueryLog {
     private Long executionTime;
     private Integer resultCount;
     private Integer rating;
+    private java.math.BigDecimal score;
     private Boolean isLabeled;
     private Long datasourceId;
     private LocalDateTime createdAt;

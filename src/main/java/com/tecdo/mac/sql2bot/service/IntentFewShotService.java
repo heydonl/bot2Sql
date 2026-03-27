@@ -140,4 +140,40 @@ public class IntentFewShotService {
         log.info("批量标注 few-shot 成功: count={}", fewShotIds.size());
         return fewShotIds;
     }
+
+    /**
+     * 获取Few-Shot示例（用于BFS动态模板生成）
+     */
+    public String getFewShotExamples(Long datasourceId, String question) {
+        try {
+            List<IntentFewShot> examples = fewShotMapper.selectActiveExamples();
+
+            if (examples.isEmpty()) {
+                return "";
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("以下是相关的问答示例：\n\n");
+
+            for (IntentFewShot example : examples) {
+                // 过滤数据源相关的示例
+                if (datasourceId != null && example.getDatasourceId() != null &&
+                    !datasourceId.equals(example.getDatasourceId())) {
+                    continue;
+                }
+
+                sb.append("问题: ").append(example.getQuestion()).append("\n");
+                if (example.getIntentJson() != null) {
+                    sb.append("答案: ").append(example.getIntentJson()).append("\n");
+                }
+                sb.append("\n");
+            }
+
+            return sb.toString();
+
+        } catch (Exception e) {
+            log.error("获取Few-Shot示例失败", e);
+            return "";
+        }
+    }
 }

@@ -56,6 +56,13 @@ public class ColumnDefinitionService {
     }
 
     /**
+     * 根据模型ID查询所有字段（别名方法）
+     */
+    public List<ColumnDefinition> getByModelId(Long modelId) {
+        return listByModelId(modelId);
+    }
+
+    /**
      * 根据字段类型查询
      */
     public List<ColumnDefinition> listByColumnType(Long modelId, String columnType) {

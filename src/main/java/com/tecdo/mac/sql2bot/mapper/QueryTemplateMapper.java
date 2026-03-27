@@ -36,6 +36,10 @@ public interface QueryTemplateMapper {
 
     int deleteById(@Param("id") Long id);
 
+    List<QueryTemplate> selectAll();
+
+    int updateById(QueryTemplate template);
+
     QueryTemplateStats getStats();
 
     class QueryTemplateStats {

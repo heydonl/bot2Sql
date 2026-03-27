@@ -52,6 +52,13 @@ public class RelationshipService {
     }
 
     /**
+     * 根据模型ID查询所有相关关系（别名方法）
+     */
+    public List<Relationship> findByModelId(Long modelId) {
+        return listByModelId(modelId);
+    }
+
+    /**
      * 根据工作区ID查询关系
      */
     public List<Relationship> listByWorkspaceId(Long workspaceId) {

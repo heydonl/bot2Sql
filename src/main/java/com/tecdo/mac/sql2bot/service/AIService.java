@@ -50,6 +50,8 @@ public class AIService {
         try {
             log.debug("Calling Claude API at: {}", baseUrl);
             log.debug("Using model: {}", model);
+            log.debug("systemPrompt: {}", systemPrompt);
+            log.debug("userPrompt: {}", userPrompt);
 
             // 构建请求体
             JsonObject requestBody = new JsonObject();
@@ -147,5 +149,119 @@ public class AIService {
 
         // 如果都没有，返回整个响应
         return response.trim();
+    }
+
+    /**
+     * 生成模板参数值
+     */
+    public String generateParameters(String parameterPrompt) {
+        try {
+            log.debug("生成模板参数值");
+            log.debug("parameterPrompt: {}", parameterPrompt);
+
+            // 构建请求体
+            JsonObject requestBody = new JsonObject();
+            requestBody.addProperty("model", model);
+            requestBody.addProperty("max_tokens", maxTokens);
+            requestBody.addProperty("temperature", temperature);
+            requestBody.addProperty("system", "你是一个参数生成专家，根据SQL模板和用户问题生成合适的参数值。");
+
+            JsonArray messages = new JsonArray();
+            JsonObject userMessage = new JsonObject();
+            userMessage.addProperty("role", "user");
+            userMessage.addProperty("content", parameterPrompt);
+            messages.add(userMessage);
+            requestBody.add("messages", messages);
+
+            String apiUrl = baseUrl + "/v1/messages";
+            log.debug("API URL: {}", apiUrl);
+
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .addHeader("x-api-key", apiKey)
+                    .addHeader("anthropic-version", "2023-06-01")
+                    .addHeader("content-type", "application/json")
+                    .post(RequestBody.create(requestBody.toString(), JSON))
+                    .build();
+
+            try (Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "Unknown error";
+                    log.error("Claude API error: {} - {}", response.code(), errorBody);
+                    throw new RuntimeException("Claude API call failed: " + response.code() + " - " + errorBody);
+                }
+
+                String responseBody = response.body().string();
+                log.debug("Claude API response: {}", responseBody);
+
+                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                JsonArray content = jsonResponse.getAsJsonArray("content");
+                if (content != null && content.size() > 0) {
+                    return content.get(0).getAsJsonObject().get("text").getAsString();
+                }
+
+                throw new RuntimeException("No content in Claude API response");
+            }
+        } catch (IOException e) {
+            log.error("Failed to call Claude API for parameter generation", e);
+            throw new RuntimeException("Claude API call failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 生成SQL模板（用于BFS动态模板生成）
+     */
+    public String generateSQLTemplate(String contextPrompt, String question) {
+        try {
+            log.debug("生成SQL模板: question={}", question);
+            log.debug("contextPrompt: {}", contextPrompt);
+
+            // 构建请求体
+            JsonObject requestBody = new JsonObject();
+            requestBody.addProperty("model", model);
+            requestBody.addProperty("max_tokens", maxTokens);
+            requestBody.addProperty("temperature", temperature);
+            requestBody.addProperty("system", contextPrompt);
+
+            JsonArray messages = new JsonArray();
+            JsonObject userMessage = new JsonObject();
+            userMessage.addProperty("role", "user");
+            userMessage.addProperty("content", question);
+            messages.add(userMessage);
+            requestBody.add("messages", messages);
+
+            String apiUrl = baseUrl + "/v1/messages";
+            log.debug("API URL: {}", apiUrl);
+
+            Request request = new Request.Builder()
+                    .url(apiUrl)
+                    .addHeader("x-api-key", apiKey)
+                    .addHeader("anthropic-version", "2023-06-01")
+                    .addHeader("content-type", "application/json")
+                    .post(RequestBody.create(requestBody.toString(), JSON))
+                    .build();
+
+            try (Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "Unknown error";
+                    log.error("Claude API error: {} - {}", response.code(), errorBody);
+                    throw new RuntimeException("Claude API call failed: " + response.code() + " - " + errorBody);
+                }
+
+                String responseBody = response.body().string();
+                log.debug("Claude API response: {}", responseBody);
+
+                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                JsonArray content = jsonResponse.getAsJsonArray("content");
+                if (content != null && content.size() > 0) {
+                    return content.get(0).getAsJsonObject().get("text").getAsString();
+                }
+
+                throw new RuntimeException("No content in Claude API response");
+            }
+        } catch (IOException e) {
+            log.error("Failed to call Claude API for SQL template generation", e);
+            throw new RuntimeException("Claude API call failed: " + e.getMessage(), e);
+        }
     }
 }

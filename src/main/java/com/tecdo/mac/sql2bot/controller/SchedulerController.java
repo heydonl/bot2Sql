@@ -3,6 +3,7 @@ package com.tecdo.mac.sql2bot.controller;
 import com.tecdo.mac.sql2bot.common.Result;
 import com.tecdo.mac.sql2bot.scheduler.SchemaIndexScheduler;
 import com.tecdo.mac.sql2bot.scheduler.SchemaIndexService;
+import com.tecdo.mac.sql2bot.service.DescriptionGeneratorService;
 import com.tecdo.mac.sql2bot.service.SchemaVectorStoreService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,7 @@ public class SchedulerController {
     private final SchemaIndexScheduler schemaIndexScheduler;
     private final SchemaIndexService schemaIndexService;
     private final SchemaVectorStoreService schemaVectorStoreService;
+    private final DescriptionGeneratorService descriptionGeneratorService;
 
     /** 手动触发全量索引 */
     @PostMapping("/full")
@@ -63,5 +65,37 @@ public class SchedulerController {
         status.put("indexCount", schemaVectorStoreService.getIndexCount());
         status.put("lastIndexTime", schemaIndexService.getLastIndexTime());
         return Result.success(status);
+    }
+
+    /**
+     * 触发批量生成表描述
+     */
+    @PostMapping("/generate-descriptions")
+    public Result<Map<String, Object>> generateDescriptions() {
+        try {
+            log.info("手动触发批量生成表描述");
+            Map<String, Object> result = descriptionGeneratorService.generateAll();
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("启动描述生成任务失败", e);
+            if (e.getMessage() != null && e.getMessage().contains("正在运行中")) {
+                return Result.error(400, "描述生成任务正在运行中，请稍后再试");
+            }
+            return Result.error("启动描述生成任务失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 查询描述生成进度
+     */
+    @GetMapping("/generate-descriptions/status")
+    public Result<Map<String, Object>> getGenerationStatus() {
+        try {
+            Map<String, Object> progress = descriptionGeneratorService.getProgress();
+            return Result.success(progress);
+        } catch (Exception e) {
+            log.error("查询描述生成进度失败", e);
+            return Result.error("查询进度失败: " + e.getMessage());
+        }
     }
 }

@@ -35,8 +35,8 @@ public class QueryController {
     @PostMapping
     public Result<QueryResponse> query(@RequestBody QueryRequest request) {
         try {
-            log.info("Received query request: datasourceId={}, question={}",
-                    request.getDatasourceId(), request.getQuestion());
+            log.info("Received query request: question={}",
+                    request.getQuestion());
 
             QueryResponse response = textToSQLService.processQuery(request);
 

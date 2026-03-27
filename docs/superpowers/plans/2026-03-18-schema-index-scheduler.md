@@ -492,3 +492,53 @@ git add -A
 git commit -m "fix: 端到端验证后的配置调整"
 
 ---
+## Task 2: SchemaVectorStoreService
+
+**Files:**
+- Create: src/main/java/com/tecdo/mac/sql2bot/service/SchemaVectorStoreService.java
+- Modify: src/main/resources/application.properties
+
+- [ ] **Step 1: 在 application.properties 末尾追加配置**
+
+
+
+- [ ] **Step 2: 检查 pom.xml jedis 依赖**
+
+查看 pom.xml，确认有 jedis 依赖。如果没有，添加：
+
+
+- [ ] **Step 3: 检查是否已有 JedisPool Bean**
+
+搜索 src/main/java/com/tecdo/mac/sql2bot/config/ 目录。如果没有 JedisPool Bean，创建 RedisConfig.java：
+
+
+- [ ] **Step 4: 创建 SchemaVectorStoreService.java**
+
+实现以下方法：
+- initIndex() - @PostConstruct，检查并创建 RedisStack HNSW 索引（idx:schema，PREFIX schema:，DIM 1024，COSINE）
+- indexModel(Model, List<ColumnDefinition>, String datasourceName) - 合并文本生成 embedding，HSET 到 RedisStack
+- searchSchemas(String query, Long datasourceId, int topK) - KNN 搜索返回 List<SchemaSearchResult>
+- deleteModel(Long modelId) - 删除单个表索引
+- clearAll() - 清空所有 schema: 前缀的 key
+- getIndexCount() - 返回索引数量
+
+内部类：
+- SchemaMeta（modelId, tableName, displayName, description, datasourceId, datasourceName, List<ColumnInfo>）
+- SchemaMeta.ColumnInfo（columnName, displayName, columnType）
+- SchemaSearchResult（SchemaMeta meta, double score）
+
+向量存储：key=schema:{modelId}，HASH 字段：table_name, datasource_id, meta(JSON), vector(FLOAT32 binary)
+
+- [ ] **Step 5: 编译验证**
+
+
+Expected: BUILD SUCCESS
+
+- [ ] **Step 6: Commit**
+
+[master fa5dc79] feat(service): 新增 SchemaVectorStoreService 使用 RedisStack KNN 向量搜索
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+ create mode 100644 newpr.md
+
+---
+

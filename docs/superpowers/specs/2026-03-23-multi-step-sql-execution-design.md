@@ -147,6 +147,41 @@ When building the param-filling prompt for the next step, truncate `prevResult` 
 
 ### Per-step param-filling prompt (inside `executePlan`)
 
+Before building the prompt, fetch a reference example from `query_log`:
+- Call `queryLogService.getBestRecentExample(step.sqlTemplate)` — returns the most recent `QueryLog` with `execution_success=true`, `rating >= 4`, and `generated_sql` containing a similar SQL pattern (matched by `skeleton` or `intent` if available, otherwise by `datasource_id`).
+- If no example found, omit the reference section from the prompt.
+
+New method to add to `QueryLogMapper` and `QueryLogService`:
+```java
+// QueryLogMapper
+QueryLog selectBestRecentExample(
+    @Param("datasourceId") Long datasourceId,
+    @Param("limit") int limit
+);
+
+// QueryLogService
+public QueryLog getBestRecentExample(Long datasourceId) {
+    return queryLogMapper.selectBestRecentExample(datasourceId, 1);
+}
+```
+
+SQL for `QueryLogMapper.xml`:
+```sql
+<select id="selectBestRecentExample" resultMap="BaseResultMap">
+    SELECT * FROM query_log
+    WHERE execution_success = TRUE
+      AND rating >= 4
+      AND generated_sql IS NOT NULL
+      <if test="datasourceId != null">
+          AND datasource_id = #{datasourceId}
+      </if>
+    ORDER BY rating DESC, created_at DESC
+    LIMIT #{limit}
+</select>
+```
+
+Prompt template:
+
 ```
 System:
   你是一个SQL参数填充专家。根据以下信息，将SQL模板中的{{param}}占位符替换为具体值。
@@ -154,6 +189,11 @@ System:
   SQL模板: <step.sqlTemplate>
 
   上一步查询结果（最多100行）: <prevResult as JSON array, or "无" if first step>
+
+  参考示例（高评分历史问答）:
+  问题: <example.question>
+  SQL: <example.generatedSql>
+  （如无参考示例则省略此节）
 
   用户问题: <question>
 
@@ -247,6 +287,9 @@ Also update `schema.sql` `CREATE TABLE query_template` definition to remove `dat
 | `service/TextToSQLService.java` | Add `executePlan`, refactor `processQuery`, update `generateSQLWithBFSContext` to return `List<SqlStep>` |
 | `service/TemplateVectorSearchService.java` | `indexTemplate`: write `"0"` for datasourceId; `TemplateMeta`: remove `datasourceId` field |
 | `service/ConversationManagementService.java` | Pass `null` as datasourceId in `conversationService.create()` |
+| `service/QueryLogService.java` | Add `getBestRecentExample(Long datasourceId)` method |
+| `mapper/QueryLogMapper.java` | Add `selectBestRecentExample` method |
+| `mapper/QueryLogMapper.xml` | Add `selectBestRecentExample` SQL |
 | `resources/schema.sql` | Remove `datasource_id` from `CREATE TABLE query_template` |
 | `resources/schema-updates.sql` | Add `ALTER TABLE query_template DROP COLUMN IF EXISTS datasource_id` |
 | `mapper/QueryTemplateMapper.xml` | Remove `datasource_id` from resultMap, INSERT, SELECT. Note: `selectAll` and `updateById` SQL are missing from this XML (pre-existing gap) — add them during this task |

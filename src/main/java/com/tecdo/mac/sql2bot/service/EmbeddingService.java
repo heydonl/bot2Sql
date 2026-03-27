@@ -49,7 +49,7 @@ public class EmbeddingService {
         try {
             // nomic-embed-text 支持 8192 tokens，截断到 30000 字符保险
             String truncated = text.length() > 30000 ? text.substring(0, 30000) : text;
-            log.debug("Generating embedding for text: {}", truncated.substring(0, Math.min(50, truncated.length())));
+            log.debug("Generating embedding for text: {}", truncated);
 
             // Ollama API 格式：{"model": "all-minilm", "prompt": "..."}
             JsonObject requestBody = new JsonObject();

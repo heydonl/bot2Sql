@@ -28,6 +28,117 @@ public class TemplateParameterService {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     /**
+     * 使用LLM生成的参数值填充模板
+     *
+     * @param template 查询模板
+     * @param llmParameterResponse LLM生成的参数响应
+     * @return 填充后的 SQL
+     */
+    public String fillTemplateWithLLMParameters(QueryTemplate template, String llmParameterResponse) {
+        log.info("开始使用LLM参数填充模板: templateId={}", template.getId());
+
+        String sql = template.getSqlTemplate();
+
+        try {
+            // 从LLM响应中提取JSON参数
+            String jsonBlock = extractJsonBlock(llmParameterResponse);
+            if (jsonBlock == null) {
+                log.warn("LLM响应中未找到JSON参数块，尝试解析整个响应");
+                jsonBlock = llmParameterResponse;
+            }
+
+            // 解析参数值
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> parameterValues = objectMapper.readValue(
+                jsonBlock, java.util.Map.class);
+
+            log.debug("解析到 {} 个参数值", parameterValues.size());
+
+            // 替换模板中的占位符
+            for (java.util.Map.Entry<String, Object> entry : parameterValues.entrySet()) {
+                String paramName = entry.getKey();
+                Object value = entry.getValue();
+
+                if (value != null) {
+                    String placeholder = "{{" + paramName + "}}";
+                    String formattedValue = formatLLMValue(value);
+                    sql = sql.replace(placeholder, formattedValue);
+
+                    log.debug("参数 {} 填充完成: {}", paramName, formattedValue);
+                }
+            }
+
+            log.info("LLM参数模板填充完成");
+            return sql;
+
+        } catch (Exception e) {
+            log.error("使用LLM参数填充模板失败", e);
+            throw new RuntimeException("模板参数填充失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 从文本中提取JSON代码块
+     */
+    private String extractJsonBlock(String text) {
+        if (text == null) return null;
+
+        // 尝试提取 ```json ``` 代码块
+        int start = text.indexOf("```json");
+        if (start != -1) {
+            start = text.indexOf("\n", start) + 1;
+            int end = text.indexOf("```", start);
+            if (end > start) {
+                return text.substring(start, end).trim();
+            }
+        }
+
+        // 尝试提取 ``` 代码块
+        start = text.indexOf("```");
+        if (start != -1) {
+            start = text.indexOf("\n", start) + 1;
+            int end = text.indexOf("```", start);
+            if (end > start) {
+                return text.substring(start, end).trim();
+            }
+        }
+
+        // 尝试查找JSON对象
+        start = text.indexOf("{");
+        if (start != -1) {
+            int end = text.lastIndexOf("}");
+            if (end > start) {
+                return text.substring(start, end + 1).trim();
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 格式化LLM生成的参数值
+     */
+    private String formatLLMValue(Object value) {
+        if (value == null) {
+            return "";
+        }
+
+        // 如果是字符串且看起来像日期，添加单引号
+        String valueStr = value.toString();
+        if (valueStr.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            return "'" + valueStr + "'";
+        }
+
+        // 如果是纯数字，直接返回
+        if (valueStr.matches("\\d+(\\.\\d+)?")) {
+            return valueStr;
+        }
+
+        // 其他情况添加单引号
+        return "'" + valueStr + "'";
+    }
+
+    /**
      * 填充模板
      * 将意图分析结果中的参数值填充到 SQL 模板的占位符中
      *

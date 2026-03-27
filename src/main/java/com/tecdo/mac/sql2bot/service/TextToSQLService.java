@@ -95,6 +95,23 @@ public class TextToSQLService {
                 messageService.saveUserMessage(conversationId, request.getQuestion());
             }
 
+            // 4. 用户满意，将问答对存入向量索引
+            if (Boolean.TRUE.equals(request.getSatisfied()) && request.getRetryQueryLogId() != null) {
+                try {
+                    QueryLog queryLog = queryLogService.findById(request.getRetryQueryLogId());
+                    if (queryLog != null) {
+                        schemaVectorStoreService.indexQuestionAnswer(
+                            queryLog.getId(),
+                            queryLog.getQuestion(),
+                            queryLog.getGeneratedSql()
+                        );
+                        log.info("用户满意，已将问答对存入向量索引: queryLogId={}", request.getRetryQueryLogId());
+                    }
+                } catch (Exception e) {
+                    log.error("存入问答向量索引失败", e);
+                }
+            }
+
             // 5. 路径3：用户不满意，直接走高召回 BFS 路径
             if (Boolean.FALSE.equals(request.getSatisfied()) && request.getRetryQueryLogId() != null) {
                 log.info("用户不满意，触发BFS高召回重试: queryLogId={}", request.getRetryQueryLogId());
@@ -555,10 +572,15 @@ public class TextToSQLService {
                 columnsMap.put(modelId, columnDefinitionService.getByModelId(modelId));
             }
 
+            // 只保留两端都在 models 列表中的关系
+            Set<Long> validModelIds = models.stream()
+                .map(com.tecdo.mac.sql2bot.domain.Model::getId)
+                .collect(java.util.stream.Collectors.toSet());
+
             List<com.tecdo.mac.sql2bot.domain.Relationship> relationships =
                 relationshipService.listAll().stream()
-                    .filter(r -> modelIds.contains(r.getFromModelId())
-                              || modelIds.contains(r.getToModelId()))
+                    .filter(r -> validModelIds.contains(r.getFromModelId())
+                              && validModelIds.contains(r.getToModelId()))
                     .collect(java.util.stream.Collectors.toList());
 
             String fewShot = intentFewShotService.getFewShotExamples(null, question);
@@ -596,8 +618,25 @@ public class TextToSQLService {
                     .filter(m -> m.getId().equals(rel.getToModelId()))
                     .map(com.tecdo.mac.sql2bot.domain.Model::getTableName)
                     .findFirst().orElse("unknown");
-                systemPrompt.append("- ").append(fromName).append(".").append(rel.getFromColumn())
-                      .append(" -> ").append(toName).append(".").append(rel.getToColumn())
+
+                // 从 joinCondition JSON 中解析字段名
+                String fromColumn = "unknown";
+                String toColumn = "unknown";
+                try {
+                    if (rel.getJoinCondition() != null && !rel.getJoinCondition().isEmpty()) {
+                        JsonNode joinConditions = objectMapper.readTree(rel.getJoinCondition());
+                        if (joinConditions.isArray() && joinConditions.size() > 0) {
+                            JsonNode firstCondition = joinConditions.get(0);
+                            fromColumn = firstCondition.has("from") ? firstCondition.get("from").asText() : "unknown";
+                            toColumn = firstCondition.has("to") ? firstCondition.get("to").asText() : "unknown";
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("解析 joinCondition 失败: {}", rel.getJoinCondition(), e);
+                }
+
+                systemPrompt.append("- ").append(fromName).append(".").append(fromColumn)
+                      .append(" -> ").append(toName).append(".").append(toColumn)
                       .append(" (").append(rel.getRelationshipType()).append(")\n");
             }
             systemPrompt.append("\n");
@@ -607,8 +646,9 @@ public class TextToSQLService {
             }
 
             systemPrompt.append("## 输出要求\n");
-            systemPrompt.append("返回JSON数组，每个元素格式: {\"sql_template\": \"...\", \"datasource_id\": N}\n");
+            systemPrompt.append("返回JSON数组，每个元素格式: {\"sql_template\": \"...\", \"params\": {...}, \"datasource_id\": N}\n");
             systemPrompt.append("- 使用 {{param_name}} 表示依赖用户输入或上一步查询结果的动态值\n");
+            systemPrompt.append("- params 对象包含所有参数的默认值或示例值\n");
             systemPrompt.append("- datasource_id 必须与表所属的数据源一致\n");
             systemPrompt.append("- 如只需一步，也返回只含一个元素的数组\n");
             systemPrompt.append("- 只返回JSON数组，不要额外解释\n");
@@ -632,6 +672,119 @@ public class TextToSQLService {
         } catch (Exception e) {
             log.error("BFS上下文LLM生成执行计划失败: question={}", question, e);
             return null;
+        }
+    }
+
+    /**
+     * 模板参数填充方法
+     */
+    private String fillTemplateParameters(String template, String userQuestion, String exampleContext) {
+        String prompt = buildParamFillingPrompt(template, userQuestion, exampleContext);
+        return aiService.generateSQL(prompt, "请填充SQL模板中的参数。");
+    }
+
+    /**
+     * 构建参数填充提示词
+     */
+    private String buildParamFillingPrompt(String template, String userQuestion, String exampleContext) {
+        StringBuilder prompt = new StringBuilder();
+
+        prompt.append("你是一个SQL参数填充专家。根据以下信息，将SQL模板中的{{param}}占位符替换为具体值。\n\n");
+
+        prompt.append("## SQL模板\n").append(template).append("\n\n");
+
+        if (exampleContext != null && !exampleContext.trim().isEmpty()) {
+            prompt.append("## 示例上下文\n").append(exampleContext).append("\n\n");
+        }
+
+        prompt.append("## 用户问题\n").append(userQuestion).append("\n\n");
+
+        prompt.append("## 要求\n");
+        prompt.append("请分析用户问题，为模板中的每个参数生成合适的值。\n");
+        prompt.append("只返回填充完成的SQL语句，不要额外解释。");
+
+        return prompt.toString();
+    }
+
+    /**
+     * 示例上下文构建方法
+     */
+    private String buildExampleContext(Long templateId) {
+        try {
+            QueryLog example = queryLogService.getBestExampleByTemplateId(templateId);
+            if (example == null) {
+                return "";
+            }
+
+            // 解析intent_sql获取表信息
+            List<TableInfo> tables = parseIntentSqlTables(example.getIntentJson());
+
+            // 构建上下文信息
+            StringBuilder context = new StringBuilder();
+            context.append("示例问题: ").append(example.getQuestion()).append("\n");
+            context.append("相关表信息:\n");
+
+            for (TableInfo tableInfo : tables) {
+                com.tecdo.mac.sql2bot.domain.Model model = modelService.getByDatabaseAndTableName(
+                    tableInfo.getDatabase(), tableInfo.getName());
+                if (model != null) {
+                    context.append("- 表: ").append(model.getTableName())
+                           .append(", 描述: ").append(model.getDescription()).append("\n");
+                }
+            }
+
+            return context.toString();
+        } catch (Exception e) {
+            log.error("构建示例上下文失败: templateId={}", templateId, e);
+            return "";
+        }
+    }
+
+    /**
+     * Intent SQL解析方法
+     */
+    private List<TableInfo> parseIntentSqlTables(String intentSql) {
+        List<TableInfo> tables = new ArrayList<>();
+        try {
+            if (intentSql == null || intentSql.trim().isEmpty()) {
+                return tables;
+            }
+
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(intentSql);
+            JsonNode tablesNode = root.get("tables");
+
+            if (tablesNode != null && tablesNode.isArray()) {
+                for (JsonNode tableNode : tablesNode) {
+                    String name = tableNode.get("name").asText();
+                    String database = tableNode.get("database").asText();
+                    tables.add(new TableInfo(name, database));
+                }
+            }
+        } catch (Exception e) {
+            log.error("解析intent_sql失败: {}", e.getMessage());
+        }
+        return tables;
+    }
+
+    /**
+     * 表信息内部类
+     */
+    private static class TableInfo {
+        private final String name;
+        private final String database;
+
+        public TableInfo(String name, String database) {
+            this.name = name;
+            this.database = database;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getDatabase() {
+            return database;
         }
     }
 

@@ -30,9 +30,30 @@ public class Relationship {
     private Long toModelId;
 
     /**
+     * 源字段名
+     */
+    private String fromColumn;
+
+    /**
+     * 目标字段名
+     */
+    private String toColumn;
+
+    /**
      * 关系类型: one_to_one, one_to_many, many_to_many
      */
     private String joinType;
+
+    /**
+     * 关系类型别名（兼容性）
+     */
+    public String getRelationshipType() {
+        return joinType;
+    }
+
+    public void setRelationshipType(String relationshipType) {
+        this.joinType = relationshipType;
+    }
 
     /**
      * JOIN条件(JSON格式)

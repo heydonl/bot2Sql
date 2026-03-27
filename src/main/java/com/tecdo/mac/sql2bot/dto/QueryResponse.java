@@ -50,6 +50,26 @@ public class QueryResponse {
      */
     private String errorMessage;
 
+    /**
+     * 查询日志ID（用于反馈）
+     */
+    private Long queryLogId;
+
+    /**
+     * 使用的模板ID
+     */
+    private Long templateId;
+
+    /**
+     * 是否来自模板
+     */
+    private boolean fromTemplate;
+
+    /**
+     * 模板相似度
+     */
+    private double templateSimilarity;
+
     public static QueryResponse success(Long conversationId, String sql, String explanation,
                                        List<Map<String, Object>> data, long executionTime) {
         QueryResponse response = new QueryResponse();
