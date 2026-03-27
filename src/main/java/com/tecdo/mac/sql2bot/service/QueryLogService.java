@@ -87,14 +87,18 @@ public class QueryLogService {
     }
 
     /**
-     * 根据模板ID从 query_log 表获取最高评分的问答对
+     * 根据模板ID获取最佳示例
      */
     public QueryLog getBestExampleByTemplateId(Long templateId) {
+        if (templateId == null) {
+            return null;
+        }
+
         try {
-            log.debug("从 query_log 获取模板最佳问答示例: templateId={}", templateId);
-            return queryLogMapper.selectBestByTemplateId(templateId);
+            // 查找使用该模板且执行成功的查询日志，按评分或时间排序
+            return queryLogMapper.findBestExampleByTemplateId(templateId);
         } catch (Exception e) {
-            log.error("从 query_log 获取模板最佳问答示例失败: templateId={}", templateId, e);
+            log.warn("获取模板示例失败: templateId={}", templateId, e);
             return null;
         }
     }

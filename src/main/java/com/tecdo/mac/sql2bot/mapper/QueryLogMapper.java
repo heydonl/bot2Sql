@@ -51,6 +51,8 @@ public interface QueryLogMapper {
 
     com.tecdo.mac.sql2bot.domain.QueryLog selectBestByTemplateId(@Param("templateId") Long templateId);
 
+    QueryLog findBestExampleByTemplateId(@Param("templateId") Long templateId);
+
     List<QueryLog> selectBestRecentExample(
         @Param("datasourceId") Long datasourceId,
         @Param("limit") int limit
