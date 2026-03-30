@@ -1,7 +1,7 @@
 package com.tecdo.mac.sql2bot.domain;
 
 import lombok.Data;
-import java.util.Date;
+import java.time.LocalDateTime;
 
 /**
  * 查询步骤执行日志
@@ -19,5 +19,5 @@ public class QueryStepLog {
     private Integer resultCount;
     private Long executionTime;
     private String errorMessage;
-    private Date createTime;
+    private LocalDateTime createTime;
 }

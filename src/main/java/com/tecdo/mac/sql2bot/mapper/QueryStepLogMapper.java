@@ -8,7 +8,7 @@ import java.util.List;
 
 @Mapper
 public interface QueryStepLogMapper {
-    void insert(QueryStepLog stepLog);
+    int insert(QueryStepLog stepLog);
     void batchInsert(@Param("stepLogs") List<QueryStepLog> stepLogs);
     List<QueryStepLog> findByQueryLogId(@Param("queryLogId") Long queryLogId);
 }

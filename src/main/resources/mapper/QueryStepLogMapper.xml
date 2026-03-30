@@ -3,6 +3,21 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.tecdo.mac.sql2bot.mapper.QueryStepLogMapper">
 
+    <resultMap id="QueryStepLogResultMap" type="com.tecdo.mac.sql2bot.domain.QueryStepLog">
+        <id property="id" column="id"/>
+        <result property="queryLogId" column="query_log_id"/>
+        <result property="stepId" column="step_id"/>
+        <result property="stepIndex" column="step_index"/>
+        <result property="sqlTemplate" column="sql_template"/>
+        <result property="filledSql" column="filled_sql"/>
+        <result property="datasourceId" column="datasource_id"/>
+        <result property="executionSuccess" column="execution_success"/>
+        <result property="resultCount" column="result_count"/>
+        <result property="executionTime" column="execution_time"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
     <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.QueryStepLog"
             useGeneratedKeys="true" keyProperty="id">
         INSERT INTO query_step_log (
@@ -25,7 +40,7 @@
         </foreach>
     </insert>
 
-    <select id="findByQueryLogId" resultType="com.tecdo.mac.sql2bot.domain.QueryStepLog">
+    <select id="findByQueryLogId" resultMap="QueryStepLogResultMap">
         SELECT * FROM query_step_log
         WHERE query_log_id = #{queryLogId}
         ORDER BY step_index ASC
