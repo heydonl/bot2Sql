@@ -283,3 +283,21 @@ CREATE TABLE IF NOT EXISTS query_log (
     INDEX idx_created_at (created_at),
     INDEX idx_intent (intent)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='查询日志';
+
+-- 16. 查询步骤执行日志表
+CREATE TABLE IF NOT EXISTS query_step_log (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+  query_log_id BIGINT NOT NULL COMMENT '关联的query_log主键',
+  step_id VARCHAR(50) NOT NULL COMMENT '步骤ID（如step1、step2）',
+  step_index INT NOT NULL COMMENT '步骤序号（从0开始）',
+  sql_template TEXT COMMENT 'SQL模板',
+  filled_sql TEXT COMMENT '填充参数后的完整SQL',
+  datasource_id BIGINT COMMENT '数据源ID',
+  execution_success BOOLEAN COMMENT '执行是否成功',
+  result_count INT COMMENT '结果行数',
+  execution_time BIGINT COMMENT '执行耗时（毫秒）',
+  error_message TEXT COMMENT '错误信息',
+  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  INDEX idx_query_step_log_query_log_id (query_log_id),
+  INDEX idx_query_step_log_step_id (step_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='查询步骤执行日志表';

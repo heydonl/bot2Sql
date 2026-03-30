@@ -195,3 +195,25 @@ CREATE TABLE IF NOT EXISTS workspace (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_name ON workspace(name);
 CREATE INDEX IF NOT EXISTS idx_workspace_priority ON workspace(priority);
 CREATE INDEX IF NOT EXISTS idx_workspace_active ON workspace(is_active);
+
+-- 12-15. 意图分析与模板系统表（query_template, template_rating, intent_few_shot, query_log）
+-- 注：H2 测试环境暂不创建这些表，如需测试请参考 schema.sql
+
+-- 16. 查询步骤执行日志表
+CREATE TABLE IF NOT EXISTS query_step_log (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  query_log_id BIGINT NOT NULL,
+  step_id VARCHAR(50) NOT NULL,
+  step_index INT NOT NULL,
+  sql_template TEXT,
+  filled_sql TEXT,
+  datasource_id BIGINT,
+  execution_success BOOLEAN,
+  result_count INT,
+  execution_time BIGINT,
+  error_message TEXT,
+  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_step_log_query_log_id ON query_step_log(query_log_id);
+CREATE INDEX IF NOT EXISTS idx_query_step_log_step_id ON query_step_log(step_id);

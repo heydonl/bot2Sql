@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.QueryStepLogMapper">
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.QueryStepLog"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO query_step_log (
+            query_log_id, step_id, step_index, sql_template, filled_sql,
+            datasource_id, execution_success, result_count, execution_time, error_message
+        ) VALUES (
+            #{queryLogId}, #{stepId}, #{stepIndex}, #{sqlTemplate}, #{filledSql},
+            #{datasourceId}, #{executionSuccess}, #{resultCount}, #{executionTime}, #{errorMessage}
+        )
+    </insert>
+
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO query_step_log (
+            query_log_id, step_id, step_index, sql_template, filled_sql,
+            datasource_id, execution_success, result_count, execution_time, error_message
+        ) VALUES
+        <foreach collection="stepLogs" item="log" separator=",">
+            (#{log.queryLogId}, #{log.stepId}, #{log.stepIndex}, #{log.sqlTemplate}, #{log.filledSql},
+             #{log.datasourceId}, #{log.executionSuccess}, #{log.resultCount}, #{log.executionTime}, #{log.errorMessage})
+        </foreach>
+    </insert>
+
+    <select id="findByQueryLogId" resultType="com.tecdo.mac.sql2bot.domain.QueryStepLog">
+        SELECT * FROM query_step_log
+        WHERE query_log_id = #{queryLogId}
+        ORDER BY step_index ASC
+    </select>
+
+</mapper>
