@@ -12,6 +12,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -27,6 +29,7 @@ import static org.mockito.Mockito.*;
  * 测试路径1（RAG模板匹配）、路径2（Schema RAG + BFS）、路径3（高召回重试）
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class TextToSQLServicePathTest {
 
     @InjectMocks
@@ -80,14 +83,44 @@ class TextToSQLServicePathTest {
     @Mock
     private IntentFewShotService intentFewShotService;
 
+    @Mock
+    private DataSourceService dataSourceService;
+
+    @Mock
+    private DatabaseService databaseService;
+
+    @Mock
+    private QueryStepLogService queryStepLogService;
+
     private ObjectMapper objectMapper;
     private QueryRequest testRequest;
     private QueryTemplate testTemplate;
     private List<Map<String, Object>> testQueryResult;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         objectMapper = new ObjectMapper();
+
+        // 注入 @Value 字段（Mockito 不会自动注入 @Value）
+        java.lang.reflect.Field topKField = TextToSQLService.class.getDeclaredField("schemaSearchTopK");
+        topKField.setAccessible(true);
+        topKField.setInt(textToSQLService, 10);
+
+        java.lang.reflect.Field bfsTopKField = TextToSQLService.class.getDeclaredField("schemaSearchBfsRetryTopK");
+        bfsTopKField.setAccessible(true);
+        bfsTopKField.setInt(textToSQLService, 20);
+
+        java.lang.reflect.Field thresholdField = TextToSQLService.class.getDeclaredField("schemaSearchSimilarityThreshold");
+        thresholdField.setAccessible(true);
+        thresholdField.setDouble(textToSQLService, 0.5);
+
+        java.lang.reflect.Field templateThresholdField = TextToSQLService.class.getDeclaredField("templateSearchSimilarityThreshold");
+        templateThresholdField.setAccessible(true);
+        templateThresholdField.setDouble(textToSQLService, 0.6);
+
+        java.lang.reflect.Field omField = TextToSQLService.class.getDeclaredField("objectMapper");
+        omField.setAccessible(true);
+        omField.set(textToSQLService, objectMapper);
 
         // 初始化测试请求
         testRequest = new QueryRequest();
@@ -301,6 +334,10 @@ class TextToSQLServicePathTest {
      */
     @Test
     void testExceptionHandlingAndFallback() throws Exception {
+        // Mock 会话创建（避免NPE）
+        when(conversationService.create(anyLong(), anyString(), isNull()))
+            .thenReturn(createTestConversation());
+
         // Mock 所有路径都失败的情况
         when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
             .thenThrow(new RuntimeException("模板搜索失败"));

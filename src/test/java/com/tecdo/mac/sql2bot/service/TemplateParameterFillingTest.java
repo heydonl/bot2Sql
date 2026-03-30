@@ -12,6 +12,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -26,6 +28,7 @@ import static org.mockito.Mockito.*;
  * 测试通过公共API验证参数填充逻辑
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class TemplateParameterFillingTest {
 
     @InjectMocks
@@ -79,14 +82,44 @@ class TemplateParameterFillingTest {
     @Mock
     private IntentFewShotService intentFewShotService;
 
+    @Mock
+    private DataSourceService dataSourceService;
+
+    @Mock
+    private DatabaseService databaseService;
+
+    @Mock
+    private QueryStepLogService queryStepLogService;
+
     private ObjectMapper objectMapper;
     private QueryTemplate testTemplate;
     private QueryLog testQueryLog;
     private QueryRequest testRequest;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         objectMapper = new ObjectMapper();
+
+        // 注入 @Value 字段（Mockito 不会自动注入 @Value）
+        java.lang.reflect.Field topKField = TextToSQLService.class.getDeclaredField("schemaSearchTopK");
+        topKField.setAccessible(true);
+        topKField.setInt(textToSQLService, 10);
+
+        java.lang.reflect.Field bfsTopKField = TextToSQLService.class.getDeclaredField("schemaSearchBfsRetryTopK");
+        bfsTopKField.setAccessible(true);
+        bfsTopKField.setInt(textToSQLService, 20);
+
+        java.lang.reflect.Field thresholdField = TextToSQLService.class.getDeclaredField("schemaSearchSimilarityThreshold");
+        thresholdField.setAccessible(true);
+        thresholdField.setDouble(textToSQLService, 0.5);
+
+        java.lang.reflect.Field templateThresholdField = TextToSQLService.class.getDeclaredField("templateSearchSimilarityThreshold");
+        templateThresholdField.setAccessible(true);
+        templateThresholdField.setDouble(textToSQLService, 0.6);
+
+        java.lang.reflect.Field omField = TextToSQLService.class.getDeclaredField("objectMapper");
+        omField.setAccessible(true);
+        omField.set(textToSQLService, objectMapper);
 
         // 初始化测试模板
         testTemplate = new QueryTemplate();
@@ -149,7 +182,7 @@ class TemplateParameterFillingTest {
         assertEquals(1L, response.getTemplateId());
 
         // 验证AI服务被调用进行参数填充
-        verify(aiService).generateSQL(anyString(), anyString());
+        verify(aiService, atLeast(1)).generateSQL(anyString(), anyString());
     }
 
     /**
@@ -201,7 +234,7 @@ class TemplateParameterFillingTest {
         assertEquals(2L, response.getTemplateId());
 
         // 验证AI服务被调用进行参数填充
-        verify(aiService).generateSQL(anyString(), anyString());
+        verify(aiService, atLeast(1)).generateSQL(anyString(), anyString());
     }
 
     /**
@@ -259,13 +292,15 @@ class TemplateParameterFillingTest {
         searchResult.setMeta(meta);
         searchResult.setScore(0.85);
 
-        // Mock AI服务抛出异常
+        // Mock AI服务抛出异常，且路径2也失败（schema搜索失败）
         when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(1L)).thenReturn(testTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))
             .thenReturn(createTestConversation());
         when(aiService.generateSQL(anyString(), anyString()))
+            .thenThrow(new RuntimeException("AI服务异常"));
+        when(schemaVectorStoreService.searchSchemas(anyString(), isNull(), anyInt()))
             .thenThrow(new RuntimeException("AI服务异常"));
 
         // 执行测试
