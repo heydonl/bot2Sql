@@ -509,7 +509,7 @@ public class TextToSQLService {
                     queryLog.setIsFromTemplate(isFromTemplate);
                     queryLog.setGeneratedSql(filledSql);
                     queryLog.setExecutionSuccess(false);
-                    queryLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
+                    queryLog.setExecutionTime(System.currentTimeMillis() - startTime);
                     queryLog.setDatasourceId(datasourceId);
                     final Long failedQueryLogId = queryLogService.logQuery(queryLog);
                     stepLogs.forEach(sl -> sl.setQueryLogId(failedQueryLogId));
@@ -1011,26 +1011,37 @@ public class TextToSQLService {
             if (paramValue == null) continue;
 
             String valueStr = paramValue.toString();
-            // 检查是否是步骤引用（如 step1.field）
-            if (valueStr.matches("step\\d+\\.\\w+")) {
+            // 检查是否是步骤引用（格式：stepId.fieldName，stepId 必须在 stepResults 中存在）
+            boolean isStepRef = false;
+            if (valueStr.contains(".")) {
                 String[] parts = valueStr.split("\\.", 2);
-                String stepId = parts[0];
-                String fieldName = parts[1];
-                List<Map<String, Object>> stepResult = stepResults.get(stepId);
-                if (stepResult != null && !stepResult.isEmpty()) {
-                    String inClause = stepResult.stream()
-                        .map(row -> row.get(fieldName))
-                        .filter(v -> v != null)
-                        .map(v -> "'" + v.toString().replace("'", "''") + "'")
-                        .collect(Collectors.joining(", "));
-                    sql = sql.replace(placeholder, inClause);
-                } else {
-                    log.warn("步骤引用未找到结果: stepId={}, field={}", stepId, fieldName);
+                String refStepId = parts[0];
+                if (stepResults.containsKey(refStepId)) {
+                    isStepRef = true;
+                    String fieldName = parts[1];
+                    List<Map<String, Object>> stepResult = stepResults.get(refStepId);
+                    if (stepResult != null && !stepResult.isEmpty()) {
+                        String inClause = stepResult.stream()
+                            .map(row -> row.get(fieldName))
+                            .filter(v -> v != null)
+                            .map(v -> "'" + v.toString().replace("'", "''") + "'")
+                            .collect(Collectors.joining(", "));
+                        if (!inClause.isEmpty()) {
+                            sql = sql.replace(placeholder, inClause);
+                        } else {
+                            log.warn("步骤引用 IN 子句为空: refStepId={}, field={}", refStepId, fieldName);
+                        }
+                    } else {
+                        log.warn("步骤引用未找到结果: refStepId={}, field={}", refStepId, fieldName);
+                    }
                 }
-            } else if (paramValue instanceof Number) {
-                sql = sql.replace(placeholder, valueStr);
-            } else {
-                sql = sql.replace(placeholder, "'" + valueStr.replace("'", "''") + "'");
+            }
+            if (!isStepRef) {
+                if (paramValue instanceof Number) {
+                    sql = sql.replace(placeholder, valueStr);
+                } else {
+                    sql = sql.replace(placeholder, "'" + valueStr.replace("'", "''") + "'");
+                }
             }
         }
         return sql;
