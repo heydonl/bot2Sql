@@ -4,6 +4,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.tecdo.mac.sql2bot.domain.Conversation;
 import com.tecdo.mac.sql2bot.domain.QueryLog;
+import com.tecdo.mac.sql2bot.domain.QueryStepLog;
 import com.tecdo.mac.sql2bot.domain.QueryTemplate;
 import com.tecdo.mac.sql2bot.dto.QueryRequest;
 import com.tecdo.mac.sql2bot.dto.QueryResponse;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Text-to-SQL 核心服务
@@ -48,6 +50,9 @@ public class TextToSQLService {
     private final RelationshipService relationshipService;
     private final ColumnDefinitionService columnDefinitionService;
     private final IntentFewShotService intentFewShotService;
+    private final DataSourceService dataSourceService;
+    private final DatabaseService databaseService;
+    private final QueryStepLogService queryStepLogService;
 
     // RAG模板检索配置
     private static final int MAX_TEMPLATE_CANDIDATES = 5;
@@ -61,6 +66,9 @@ public class TextToSQLService {
 
     @org.springframework.beans.factory.annotation.Value("${schema.search.bfs-retry-top-k:20}")
     private int schemaSearchBfsRetryTopK;
+
+    @org.springframework.beans.factory.annotation.Value("${template.search.similarity-threshold:0.6}")
+    private double templateSearchSimilarityThreshold;
 
     /**
      * 处理自然语言查询（支持会话隔离和多轮对话）
@@ -131,11 +139,16 @@ public class TextToSQLService {
                 if (!templateResults.isEmpty()) {
                     TemplateVectorSearchService.TemplateSearchResult bestMatch = templateResults.get(0);
                     templateSimilarity = bestMatch.getSimilarity();
-                    QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
-                    if (candidate != null) {
-                        matchedTemplate = candidate;
-                        log.info("RAG模板匹配成功: templateId={}, similarity={}",
-                                matchedTemplate.getId(), templateSimilarity);
+                    if (templateSimilarity >= templateSearchSimilarityThreshold) {
+                        QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
+                        if (candidate != null) {
+                            matchedTemplate = candidate;
+                            log.info("RAG模板匹配成功: templateId={}, similarity={}",
+                                    matchedTemplate.getId(), templateSimilarity);
+                        }
+                    } else {
+                        log.info("模板相似度不足，降级到路径2: similarity={}, threshold={}",
+                            templateSimilarity, templateSearchSimilarityThreshold);
                     }
                 } else {
                     log.info("未找到符合条件的SQL模板，降级到路径2");
@@ -146,12 +159,17 @@ public class TextToSQLService {
 
             if (matchedTemplate != null) {
                 try {
-                    List<SqlStep> steps = parseSqlSteps(matchedTemplate.getSqlTemplate());
+                    // 路径1：使用 LLM 基于模板和示例生成参数填充的执行计划
+                    String prompt = buildTemplateParameterPrompt(matchedTemplate, request.getQuestion());
+                    String llmResp = aiService.generateSQL(prompt, "请根据模板和问题生成参数填充的SQL执行计划。");
+                    String jsonStr = extractJsonBlock(llmResp);
+                    if (jsonStr == null) jsonStr = llmResp.trim();
+                    List<SqlStep> steps = parseSqlSteps(jsonStr);
                     if (steps == null) {
-                        log.warn("路径1 模板解析失败，降级到路径2: templateId={}", matchedTemplate.getId());
+                        log.warn("路径1 LLM参数填充解析失败，降级到路径2: templateId={}", matchedTemplate.getId());
                     } else {
                         queryTemplateService.incrementUsageCount(matchedTemplate.getId());
-                        log.info("路径1 模板解析成功: templateId={}, steps={}", matchedTemplate.getId(), steps.size());
+                        log.info("路径1 参数填充成功: templateId={}, steps={}", matchedTemplate.getId(), steps.size());
                         return executePlan(request.getQuestion(), steps, conversationId, request,
                             matchedTemplate.getId(), true, templateSimilarity, startTime);
                     }
@@ -313,9 +331,36 @@ public class TextToSQLService {
                 List<SqlStep> steps = new ArrayList<>();
                 for (JsonNode item : node) {
                     SqlStep step = new SqlStep();
+                    step.setId(item.path("id").asText(null));
                     step.setSqlTemplate(item.path("sql_template").asText(null));
                     step.setDatasourceId(item.has("datasource_id") && !item.get("datasource_id").isNull()
                         ? item.get("datasource_id").asLong() : null);
+                    // 解析 tables
+                    JsonNode tablesNode = item.path("tables");
+                    if (tablesNode.isArray()) {
+                        List<SqlStep.TableInfo> tables = new ArrayList<>();
+                        for (JsonNode tableNode : tablesNode) {
+                            SqlStep.TableInfo tableInfo = new SqlStep.TableInfo();
+                            tableInfo.setName(tableNode.path("name").asText());
+                            tableInfo.setDatabase(tableNode.path("database").asText());
+                            tables.add(tableInfo);
+                        }
+                        step.setTables(tables);
+                    }
+                    // 解析 params
+                    JsonNode paramsNode = item.path("params");
+                    if (paramsNode.isObject()) {
+                        Map<String, Object> params = new HashMap<>();
+                        paramsNode.properties().forEach(entry -> {
+                            JsonNode val = entry.getValue();
+                            if (val.isNumber()) {
+                                params.put(entry.getKey(), val.numberValue());
+                            } else {
+                                params.put(entry.getKey(), val.asText());
+                            }
+                        });
+                        step.setParams(params);
+                    }
                     steps.add(step);
                 }
                 return steps.isEmpty() ? null : steps;
@@ -382,30 +427,43 @@ public class TextToSQLService {
         List<Map<String, Object>> prevResult = null;
         String lastFilledSql = null;
         Long lastDatasourceId = null;
+        List<QueryStepLog> stepLogs = new ArrayList<>();
+        Map<String, List<Map<String, Object>>> allStepResults = new HashMap<>();
 
-        for (SqlStep step : steps) {
-            // 获取参考示例
-            QueryLog example = null;
-            try {
-                example = queryLogService.getBestRecentExample(step.getDatasourceId());
-            } catch (Exception e) {
-                log.warn("获取参考示例失败，跳过: {}", e.getMessage());
-            }
+        for (int i = 0; i < steps.size(); i++) {
+            SqlStep step = steps.get(i);
+            long stepStartTime = System.currentTimeMillis();
+            QueryStepLog stepLog = new QueryStepLog();
+            stepLog.setStepId(step.getId() != null ? step.getId() : "step" + (i + 1));
+            stepLog.setStepIndex(i);
+            stepLog.setSqlTemplate(step.getSqlTemplate());
+            stepLog.setDatasourceId(step.getDatasourceId());
 
-            // LLM 填充参数
+            // 参数填充：优先使用 params 直接替换，否则走 LLM
             String filledSql;
-            try {
-                String prompt = buildParamFillingPrompt(question, step.getSqlTemplate(), prevResult, example);
-                String llmResp = aiService.generateSQL(prompt, "请填充SQL模板中的参数。");
-                filledSql = aiService.extractSQL(llmResp);
-                if (filledSql == null || filledSql.isBlank()) {
-                    filledSql = llmResp.trim(); // fallback: use raw response
+            if (step.getParams() != null && !step.getParams().isEmpty()) {
+                filledSql = replacePlaceholders(step, allStepResults);
+            } else {
+                // 降级到 LLM 参数填充
+                QueryLog example = null;
+                try {
+                    example = queryLogService.getBestRecentExample(step.getDatasourceId());
+                } catch (Exception e) {
+                    log.warn("获取参考示例失败，跳过: {}", e.getMessage());
                 }
-            } catch (Exception e) {
-                log.error("LLM参数填充失败: step={}", step.getSqlTemplate(), e);
-                String err = "SQL参数填充失败: " + e.getMessage();
-                if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
-                return QueryResponse.error(err);
+                try {
+                    String prompt = buildParamFillingPrompt(question, step.getSqlTemplate(), prevResult, example);
+                    String llmResp = aiService.generateSQL(prompt, "请填充SQL模板中的参数。");
+                    filledSql = aiService.extractSQL(llmResp);
+                    if (filledSql == null || filledSql.isBlank()) {
+                        filledSql = llmResp.trim();
+                    }
+                } catch (Exception e) {
+                    log.error("LLM参数填充失败: step={}", step.getSqlTemplate(), e);
+                    String err = "SQL参数填充失败: " + e.getMessage();
+                    if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
+                    return QueryResponse.error(err);
+                }
             }
 
             // 推断数据源
@@ -420,14 +478,27 @@ public class TextToSQLService {
             }
 
             // 执行 SQL
-            long execStart = System.currentTimeMillis();
             try {
                 prevResult = queryExecutorService.executeQuery(datasourceId, filledSql);
                 lastFilledSql = filledSql;
                 lastDatasourceId = datasourceId;
                 log.info("步骤执行成功: sql={}, rows={}", filledSql, prevResult.size());
+
+                allStepResults.put(stepLog.getStepId(), prevResult);
+                stepLog.setFilledSql(filledSql);
+                stepLog.setExecutionSuccess(true);
+                stepLog.setResultCount(prevResult.size());
+                stepLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
+                stepLogs.add(stepLog);
             } catch (Exception e) {
                 log.error("步骤执行失败: sql={}", filledSql, e);
+
+                stepLog.setFilledSql(filledSql);
+                stepLog.setExecutionSuccess(false);
+                stepLog.setErrorMessage(e.getMessage());
+                stepLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
+                stepLogs.add(stepLog);
+
                 // 记录失败日志
                 try {
                     QueryLog queryLog = new QueryLog();
@@ -438,9 +509,11 @@ public class TextToSQLService {
                     queryLog.setIsFromTemplate(isFromTemplate);
                     queryLog.setGeneratedSql(filledSql);
                     queryLog.setExecutionSuccess(false);
-                    queryLog.setExecutionTime(System.currentTimeMillis() - execStart);
+                    queryLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
                     queryLog.setDatasourceId(datasourceId);
-                    queryLogService.logQuery(queryLog);
+                    final Long failedQueryLogId = queryLogService.logQuery(queryLog);
+                    stepLogs.forEach(sl -> sl.setQueryLogId(failedQueryLogId));
+                    try { queryStepLogService.logSteps(stepLogs); } catch (Exception ex) { log.warn("记录步骤日志失败", ex); }
                 } catch (Exception logEx) {
                     log.warn("记录失败日志异常", logEx);
                 }
@@ -467,6 +540,12 @@ public class TextToSQLService {
             queryLogId = queryLogService.logQuery(queryLog);
         } catch (Exception e) {
             log.warn("记录查询日志失败（不影响查询结果）", e);
+        }
+
+        if (queryLogId != null) {
+            final Long finalQueryLogId = queryLogId;
+            stepLogs.forEach(sl -> sl.setQueryLogId(finalQueryLogId));
+            try { queryStepLogService.logSteps(stepLogs); } catch (Exception e) { log.warn("记录步骤日志失败", e); }
         }
 
         if (conversationId != null) {
@@ -786,6 +865,175 @@ public class TextToSQLService {
         public String getDatabase() {
             return database;
         }
+    }
+
+    /**
+     * 解析 intent_json/intent_sql JSON 为 SqlStep 列表（用于构建示例上下文）
+     */
+    private List<SqlStep> parseIntentSql(String intentSqlJson) {
+        try {
+            JsonNode stepsArray = objectMapper.readTree(intentSqlJson);
+            List<SqlStep> steps = new ArrayList<>();
+            for (JsonNode stepNode : stepsArray) {
+                SqlStep step = new SqlStep();
+                step.setId(stepNode.path("id").asText(null));
+                step.setDatasourceId(stepNode.path("datasource_id").asLong(0));
+                JsonNode tablesNode = stepNode.path("tables");
+                if (tablesNode.isArray()) {
+                    List<SqlStep.TableInfo> tables = new ArrayList<>();
+                    for (JsonNode tableNode : tablesNode) {
+                        SqlStep.TableInfo tableInfo = new SqlStep.TableInfo();
+                        tableInfo.setName(tableNode.path("name").asText());
+                        tableInfo.setDatabase(tableNode.path("database").asText());
+                        tables.add(tableInfo);
+                    }
+                    step.setTables(tables);
+                }
+                steps.add(step);
+            }
+            return steps;
+        } catch (Exception e) {
+            log.warn("解析 intent_sql 失败: {}", intentSqlJson, e);
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /**
+     * 构建示例的完整上下文（数据源、数据库、表、字段）供路径1使用
+     */
+    private String buildExampleContextForTemplate(List<SqlStep> intentSteps) {
+        StringBuilder context = new StringBuilder();
+        Set<Long> processedDataSources = new HashSet<>();
+        Set<String> processedTables = new HashSet<>();
+
+        for (SqlStep step : intentSteps) {
+            Long dataSourceId = step.getDatasourceId();
+            if (dataSourceId != null && dataSourceId > 0 && !processedDataSources.contains(dataSourceId)) {
+                try {
+                    com.tecdo.mac.sql2bot.domain.DataSource ds = dataSourceService.getById(dataSourceId);
+                    if (ds != null) {
+                        context.append("### 数据源: ").append(ds.getName()).append("\n");
+                        context.append("- **ID**: ").append(ds.getId()).append("\n\n");
+                        processedDataSources.add(dataSourceId);
+                    }
+                } catch (Exception e) {
+                    log.warn("获取数据源失败: dataSourceId={}", dataSourceId, e);
+                }
+            }
+
+            if (step.getTables() != null) {
+                for (SqlStep.TableInfo tableInfo : step.getTables()) {
+                    String tableKey = dataSourceId + "." + tableInfo.getDatabase() + "." + tableInfo.getName();
+                    if (!processedTables.contains(tableKey)) {
+                        try {
+                            com.tecdo.mac.sql2bot.domain.Model model =
+                                modelService.getByDatabaseAndTableName(tableInfo.getDatabase(), tableInfo.getName());
+                            if (model != null) {
+                                context.append("#### 表: ").append(model.getTableName()).append("\n");
+                                if (model.getDescription() != null) {
+                                    context.append("**描述**: ").append(model.getDescription()).append("\n");
+                                }
+                                List<com.tecdo.mac.sql2bot.domain.ColumnDefinition> columns =
+                                    columnDefinitionService.getByModelId(model.getId());
+                                context.append("**字段**:\n");
+                                for (com.tecdo.mac.sql2bot.domain.ColumnDefinition col : columns) {
+                                    context.append("- `").append(col.getColumnName()).append("`");
+                                    if (col.getColumnType() != null) context.append(" (").append(col.getColumnType()).append(")");
+                                    if (col.getDescription() != null) context.append(": ").append(col.getDescription());
+                                    context.append("\n");
+                                }
+                                context.append("\n");
+                                processedTables.add(tableKey);
+                            }
+                        } catch (Exception e) {
+                            log.warn("获取表信息失败: {}.{}", tableInfo.getDatabase(), tableInfo.getName(), e);
+                        }
+                    }
+                }
+            }
+        }
+        return context.toString();
+    }
+
+    /**
+     * 构建路径1的参数填充 Prompt（包含完整示例上下文）
+     */
+    private String buildTemplateParameterPrompt(QueryTemplate template, String question) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("# 角色\n");
+        prompt.append("你是一名 SQL 专家，擅长根据用户问题生成多步骤的 SQL 执行计划。\n\n");
+        prompt.append("# 任务\n");
+        prompt.append("你将获得一组预定义的 SQL 模板（JSON 数组形式），每个模板包含一个 SQL 片段、参数说明等信息。\n");
+        prompt.append("你需要根据用户的最新问题，从模板中选出合适的步骤，并为每个步骤填充具体的参数值（params 字段）。\n\n");
+        prompt.append("# 模板说明\n");
+        prompt.append("- 模板中的 sql_template 包含占位符 {{xxx}}，你需要在 params 中写出实际值\n");
+        prompt.append("- 如果某个参数依赖前一步的输出（如 {{step1.字段名}}），params 中填写 \"step1.字段名\" 即可\n");
+        prompt.append("- 时间范围类参数需根据用户描述进行合理转换\n\n");
+
+        try {
+            QueryLog example = queryLogService.getBestExampleByTemplateId(template.getId());
+            if (example != null && example.getIntentJson() != null) {
+                List<SqlStep> intentSteps = parseIntentSql(example.getIntentJson());
+                if (!intentSteps.isEmpty()) {
+                    String exampleContext = buildExampleContextForTemplate(intentSteps);
+                    prompt.append("# 示例\n");
+                    prompt.append("**用户问题**: ").append(example.getQuestion()).append("\n\n");
+                    if (!exampleContext.isBlank()) {
+                        prompt.append(exampleContext).append("\n");
+                    }
+                    if (example.getGeneratedSql() != null) {
+                        prompt.append("**预期输出**:\n```json\n").append(example.getGeneratedSql()).append("\n```\n\n");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("获取模板示例失败: templateId={}", template.getId(), e);
+        }
+
+        prompt.append("用户问题: ").append(question).append("\n");
+        prompt.append("初始模板:\n```json\n").append(template.getSqlTemplate()).append("\n```\n\n");
+        prompt.append("请返回填充了 params 字段的完整 JSON 数组，用 ```json ``` 包裹。\n");
+        return prompt.toString();
+    }
+
+    /**
+     * 替换 SQL 模板中的占位符
+     * 支持简单参数 {{param}} 和步骤引用 {{step1.field}}
+     */
+    private String replacePlaceholders(SqlStep step, Map<String, List<Map<String, Object>>> stepResults) {
+        String sql = step.getSqlTemplate();
+        if (sql == null || step.getParams() == null || step.getParams().isEmpty()) {
+            return sql;
+        }
+        for (Map.Entry<String, Object> entry : step.getParams().entrySet()) {
+            String placeholder = "{{" + entry.getKey() + "}}";
+            Object paramValue = entry.getValue();
+            if (paramValue == null) continue;
+
+            String valueStr = paramValue.toString();
+            // 检查是否是步骤引用（如 step1.field）
+            if (valueStr.matches("step\\d+\\.\\w+")) {
+                String[] parts = valueStr.split("\\.", 2);
+                String stepId = parts[0];
+                String fieldName = parts[1];
+                List<Map<String, Object>> stepResult = stepResults.get(stepId);
+                if (stepResult != null && !stepResult.isEmpty()) {
+                    String inClause = stepResult.stream()
+                        .map(row -> row.get(fieldName))
+                        .filter(v -> v != null)
+                        .map(v -> "'" + v.toString().replace("'", "''") + "'")
+                        .collect(Collectors.joining(", "));
+                    sql = sql.replace(placeholder, inClause);
+                } else {
+                    log.warn("步骤引用未找到结果: stepId={}, field={}", stepId, fieldName);
+                }
+            } else if (paramValue instanceof Number) {
+                sql = sql.replace(placeholder, valueStr);
+            } else {
+                sql = sql.replace(placeholder, "'" + valueStr.replace("'", "''") + "'");
+            }
+        }
+        return sql;
     }
 
     /**
