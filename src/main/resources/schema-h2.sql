@@ -217,3 +217,23 @@ CREATE TABLE IF NOT EXISTS query_step_log (
 
 CREATE INDEX IF NOT EXISTS idx_query_step_log_query_log_id ON query_step_log(query_log_id);
 CREATE INDEX IF NOT EXISTS idx_query_step_log_step_id ON query_step_log(step_id);
+
+-- 17. 用户查询模板表
+CREATE TABLE IF NOT EXISTS user_query_template (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    question VARCHAR(500) NOT NULL,
+    generated_sql TEXT NOT NULL,
+    datasource_id BIGINT,
+    total_score INT DEFAULT 0,
+    rating_count INT DEFAULT 0,
+    avg_score DECIMAL(3,2) DEFAULT 0.00,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_user_query_template_question_sql
+    ON user_query_template(question, generated_sql);
+CREATE INDEX IF NOT EXISTS idx_user_query_template_avg_score
+    ON user_query_template(avg_score DESC);
+CREATE INDEX IF NOT EXISTS idx_user_query_template_datasource
+    ON user_query_template(datasource_id);

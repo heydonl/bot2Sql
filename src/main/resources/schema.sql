@@ -277,11 +277,17 @@ CREATE TABLE IF NOT EXISTS query_log (
     score DECIMAL(3,2) DEFAULT 0.00 COMMENT '查询得分（0-5.00）',
     is_labeled BOOLEAN DEFAULT FALSE COMMENT '是否已标注为few-shot',
     datasource_id BIGINT COMMENT '数据源ID',
+    satisfied BOOLEAN COMMENT '用户是否满意（NULL=未评价，TRUE=满意，FALSE=不满意）',
+    retry_from_id BIGINT COMMENT '重试来源的query_log ID',
+    source_type VARCHAR(20) COMMENT '来源类型（user_template, system_template, bfs）',
+    source_template_id BIGINT COMMENT '来源模板ID',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     INDEX idx_user_id (user_id),
     INDEX idx_template_id (template_id),
     INDEX idx_created_at (created_at),
-    INDEX idx_intent (intent)
+    INDEX idx_intent (intent),
+    INDEX idx_retry_from (retry_from_id),
+    INDEX idx_source (source_type, source_template_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='查询日志';
 
 -- 16. 查询步骤执行日志表
@@ -301,3 +307,19 @@ CREATE TABLE IF NOT EXISTS query_step_log (
   INDEX idx_query_step_log_query_log_id (query_log_id),
   INDEX idx_query_step_log_step_id (step_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='查询步骤执行日志表';
+
+-- 17. 用户查询模板表
+CREATE TABLE IF NOT EXISTS user_query_template (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+    question VARCHAR(500) NOT NULL COMMENT '用户问题',
+    generated_sql TEXT NOT NULL COMMENT '生成的SQL',
+    datasource_id BIGINT COMMENT '数据源ID',
+    total_score INT DEFAULT 0 COMMENT '总评分（满意次数）',
+    rating_count INT DEFAULT 0 COMMENT '评分次数（满意+不满意）',
+    avg_score DECIMAL(3,2) DEFAULT 0.00 COMMENT '平均分',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_question_sql (question(255), generated_sql(255)),
+    INDEX idx_avg_score (avg_score DESC),
+    INDEX idx_datasource (datasource_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户查询模板';
