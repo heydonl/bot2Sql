@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.UserQueryTemplateMapper">
+
+    <resultMap id="UserQueryTemplateResultMap" type="com.tecdo.mac.sql2bot.domain.UserQueryTemplate">
+        <id property="id" column="id"/>
+        <result property="question" column="question"/>
+        <result property="generatedSql" column="generated_sql"/>
+        <result property="datasourceId" column="datasource_id"/>
+        <result property="totalScore" column="total_score"/>
+        <result property="ratingCount" column="rating_count"/>
+        <result property="avgScore" column="avg_score"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="findByQuestionAndSql" resultMap="UserQueryTemplateResultMap">
+        SELECT * FROM user_query_template
+        WHERE question = #{question} AND generated_sql = #{sql}
+        LIMIT 1
+    </select>
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.UserQueryTemplate"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO user_query_template (
+            question, generated_sql, datasource_id, total_score, rating_count, avg_score
+        ) VALUES (
+            #{question}, #{generatedSql}, #{datasourceId}, 1, 1, 1.00
+        )
+    </insert>
+
+    <select id="findById" resultMap="UserQueryTemplateResultMap">
+        SELECT * FROM user_query_template WHERE id = #{id}
+    </select>
+
+    <update id="updateScoreOnSatisfied">
+        UPDATE user_query_template
+        SET total_score = total_score + 1,
+            rating_count = rating_count + 1,
+            avg_score = (total_score + 1) / (rating_count + 1)
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateScoreOnUnsatisfied">
+        UPDATE user_query_template
+        SET rating_count = rating_count + 1,
+            avg_score = total_score / (rating_count + 1)
+        WHERE id = #{id}
+    </update>
+
+</mapper>
