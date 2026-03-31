@@ -145,12 +145,12 @@
         LIMIT 1
     </select>
 
-    <select id="findBestExampleByTemplateId" resultType="com.tecdo.mac.sql2bot.domain.QueryLog">
+    <select id="findBestExampleByTemplateId" resultMap="BaseResultMap">
         SELECT * FROM query_log
         WHERE template_id = #{templateId}
         AND execution_success = true
-        AND intent_sql IS NOT NULL
-        ORDER BY create_time DESC
+        AND generated_sql IS NOT NULL
+        ORDER BY created_at DESC
         LIMIT 1
     </select>
 
