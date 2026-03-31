@@ -268,8 +268,21 @@ public class TextToSQLService {
             UserQueryTemplate existing = userQueryTemplateService.findByQuestionAndSql(question, sql);
 
             if (existing == null) {
-                UserQueryTemplate newTemplate = userQueryTemplateService.create(question, sql, queryLog.getDatasourceId());
-                templateVectorStoreService.indexUserTemplate(newTemplate);
+                try {
+                    UserQueryTemplate newTemplate = userQueryTemplateService.create(question, sql, queryLog.getDatasourceId());
+                    try {
+                        templateVectorStoreService.indexUserTemplate(newTemplate);
+                    } catch (Exception e) {
+                        log.error("用户模板向量索引失败，不影响反馈记录: id={}", newTemplate.getId(), e);
+                    }
+                } catch (Exception e) {
+                    // 并发场景下可能触发唯一索引冲突，此时查找已存在的记录并更新评分
+                    log.warn("创建用户模板时发生冲突（可能是并发），尝试更新已有记录: question={}", question);
+                    UserQueryTemplate conflicted = userQueryTemplateService.findByQuestionAndSql(question, sql);
+                    if (conflicted != null) {
+                        userQueryTemplateService.updateScoreOnSatisfied(conflicted.getId());
+                    }
+                }
             } else {
                 userQueryTemplateService.updateScoreOnSatisfied(existing.getId());
             }
