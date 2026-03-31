@@ -1,13 +1,16 @@
 package com.tecdo.mac.sql2bot.service;
 
 import com.tecdo.mac.sql2bot.domain.QueryTemplate;
+import com.tecdo.mac.sql2bot.domain.UserQueryTemplate;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -25,6 +28,14 @@ public class TemplateVectorStoreService {
     private static final String TEMPLATE_VECTOR_KEY_PREFIX = "template_vector:";
     private static final String TEMPLATE_META_KEY_PREFIX = "template_meta:";
     private static final String TEMPLATE_INDEX_KEY = "template_index";
+
+    private static final String USER_TEMPLATE_VECTOR_KEY_PREFIX = "user_template_vector:";
+    private static final String USER_TEMPLATE_META_KEY_PREFIX = "user_template_meta:";
+    private static final String USER_TEMPLATE_INDEX_KEY = "user_template_index";
+
+    // 模板类型常量
+    private static final int TYPE_USER_TEMPLATE = 1;
+    private static final int TYPE_SYSTEM_TEMPLATE = 2;
 
     /**
      * 为SQL模板创建向量索引
@@ -48,6 +59,7 @@ public class TemplateVectorStoreService {
             // 存储元数据
             TemplateMeta meta = new TemplateMeta();
             meta.setTemplateId(template.getId());
+            meta.setType(TYPE_SYSTEM_TEMPLATE);  // 2=system_template
             meta.setSkeleton(template.getSkeleton());
             meta.setSqlTemplate(template.getSqlTemplate());
             meta.setIntent(template.getIntent());
@@ -190,6 +202,150 @@ public class TemplateVectorStoreService {
         }
     }
 
+    // ==================== 用户模板向量索引方法 ====================
+
+    /**
+     * 异步索引用户查询模板到向量存储
+     */
+    @Async
+    public CompletableFuture<Void> indexUserTemplate(UserQueryTemplate userTemplate) {
+        try {
+            if (userTemplate.getQuestion() == null || userTemplate.getQuestion().trim().isEmpty()) {
+                log.warn("用户模板没有问题文本，跳过索引: userTemplateId={}", userTemplate.getId());
+                return CompletableFuture.completedFuture(null);
+            }
+
+            // 生成嵌入向量
+            float[] vectorArray = embeddingService.generateEmbedding(userTemplate.getQuestion());
+            List<Double> vector = new ArrayList<>();
+            for (float f : vectorArray) {
+                vector.add((double) f);
+            }
+
+            // 存储向量
+            String vectorKey = USER_TEMPLATE_VECTOR_KEY_PREFIX + userTemplate.getId();
+            redisTemplate.opsForList().rightPushAll(vectorKey, vector.toArray());
+
+            // 构建元数据（type=1 表示 user_template）
+            TemplateMeta meta = new TemplateMeta();
+            meta.setTemplateId(userTemplate.getId());
+            meta.setType(TYPE_USER_TEMPLATE);  // 1=user_template
+            meta.setExampleQuestion(userTemplate.getQuestion());
+            meta.setSqlTemplate(userTemplate.getGeneratedSql());
+            meta.setDatasourceId(userTemplate.getDatasourceId());
+
+            String metaKey = USER_TEMPLATE_META_KEY_PREFIX + userTemplate.getId();
+            redisTemplate.opsForValue().set(metaKey, meta);
+
+            // 添加到用户模板索引
+            redisTemplate.opsForSet().add(USER_TEMPLATE_INDEX_KEY, userTemplate.getId().toString());
+
+            log.info("用户模板向量索引成功: userTemplateId={}", userTemplate.getId());
+            return CompletableFuture.completedFuture(null);
+
+        } catch (Exception e) {
+            log.error("用户模板向量索引失败: userTemplateId={}", userTemplate.getId(), e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /**
+     * 搜索相似的用户查询模板
+     */
+    public List<TemplateSearchResult> searchSimilarUserTemplates(String question, Long datasourceId, int topK) {
+        try {
+            log.info("搜索相似用户模板: question={}, datasourceId={}, topK={}", question, datasourceId, topK);
+
+            float[] queryVectorArray = embeddingService.generateEmbedding(question);
+            List<Double> queryVector = new ArrayList<>();
+            for (float f : queryVectorArray) {
+                queryVector.add((double) f);
+            }
+
+            Set<Object> templateIds = redisTemplate.opsForSet().members(USER_TEMPLATE_INDEX_KEY);
+            if (templateIds == null || templateIds.isEmpty()) {
+                log.warn("没有找到任何用户模板索引");
+                return Collections.emptyList();
+            }
+
+            List<TemplateSearchResult> results = new ArrayList<>();
+
+            for (Object templateIdObj : templateIds) {
+                String templateId = templateIdObj.toString();
+                try {
+                    String metaKey = USER_TEMPLATE_META_KEY_PREFIX + templateId;
+                    TemplateMeta meta = (TemplateMeta) redisTemplate.opsForValue().get(metaKey);
+                    if (meta == null) continue;
+
+                    // 按 datasourceId 过滤
+                    if (datasourceId != null && !datasourceId.equals(meta.getDatasourceId())) continue;
+
+                    String vectorKey = USER_TEMPLATE_VECTOR_KEY_PREFIX + templateId;
+                    List<Object> vectorObjs = redisTemplate.opsForList().range(vectorKey, 0, -1);
+                    if (vectorObjs == null || vectorObjs.isEmpty()) continue;
+
+                    List<Double> templateVector = vectorObjs.stream()
+                            .map(obj -> Double.valueOf(obj.toString()))
+                            .collect(Collectors.toList());
+
+                    double similarity = calculateCosineSimilarity(queryVector, templateVector);
+
+                    TemplateSearchResult result = new TemplateSearchResult();
+                    result.setMeta(meta);
+                    result.setSimilarity(similarity);
+                    results.add(result);
+
+                } catch (Exception e) {
+                    log.warn("处理用户模板时出错: userTemplateId={}", templateId, e);
+                }
+            }
+
+            results.sort((a, b) -> Double.compare(b.getSimilarity(), a.getSimilarity()));
+            List<TemplateSearchResult> topResults = results.stream().limit(topK).collect(Collectors.toList());
+
+            log.info("找到 {} 个相似用户模板，返回前 {} 个", results.size(), topResults.size());
+            return topResults;
+
+        } catch (Exception e) {
+            log.error("搜索相似用户模板失败", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 删除用户模板索引
+     */
+    public void deleteUserTemplate(Long userTemplateId) {
+        try {
+            redisTemplate.delete(USER_TEMPLATE_VECTOR_KEY_PREFIX + userTemplateId);
+            redisTemplate.delete(USER_TEMPLATE_META_KEY_PREFIX + userTemplateId);
+            redisTemplate.opsForSet().remove(USER_TEMPLATE_INDEX_KEY, userTemplateId.toString());
+            log.info("已删除用户模板索引: userTemplateId={}", userTemplateId);
+        } catch (Exception e) {
+            log.error("删除用户模板索引失败: userTemplateId={}", userTemplateId, e);
+        }
+    }
+
+    /**
+     * 清空所有用户模板索引
+     */
+    public void clearAllUserTemplates() {
+        try {
+            Set<Object> templateIds = redisTemplate.opsForSet().members(USER_TEMPLATE_INDEX_KEY);
+            if (templateIds != null) {
+                for (Object templateIdObj : templateIds) {
+                    String templateId = templateIdObj.toString();
+                    redisTemplate.delete(USER_TEMPLATE_VECTOR_KEY_PREFIX + templateId);
+                    redisTemplate.delete(USER_TEMPLATE_META_KEY_PREFIX + templateId);
+                }
+            }
+            redisTemplate.delete(USER_TEMPLATE_INDEX_KEY);
+            log.info("已清空所有用户模板索引");
+        } catch (Exception e) {
+            log.error("清空用户模板索引失败", e);
+        }
+    }
+
     /**
      * 构建用于embedding的文本
      */
@@ -250,6 +406,8 @@ public class TemplateVectorStoreService {
     @Data
     public static class TemplateMeta {
         private Long templateId;
+        private Integer type;  // 1=user_template, 2=system_template
+        private Long datasourceId;
         private String skeleton;
         private String sqlTemplate;
         private String intent;
