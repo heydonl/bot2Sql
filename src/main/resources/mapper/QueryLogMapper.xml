@@ -39,7 +39,7 @@
             #{userId}, #{conversationId}, #{question}, #{intent}, #{intentJson},
             #{skeleton}, #{templateId}, #{isFromTemplate}, #{generatedSql},
             #{executionSuccess}, #{executionTime}, #{resultCount}, #{datasourceId},
-            #{satisfied}, #{retryFromId}, #{sourceType}, #{sourceTemplateId}
+            #{satisfied,jdbcType=BOOLEAN}, #{retryFromId,jdbcType=BIGINT}, #{sourceType,jdbcType=VARCHAR}, #{sourceTemplateId,jdbcType=BIGINT}
         )
     </insert>
 
@@ -117,7 +117,7 @@
 
     <update id="updateSatisfied">
         UPDATE query_log
-        SET satisfied = #{satisfied}
+        SET satisfied = #{satisfied,jdbcType=BOOLEAN}
         WHERE id = #{id}
     </update>
 
