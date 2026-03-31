@@ -16,7 +16,8 @@
     </resultMap>
 
     <select id="findByQuestionAndSql" resultMap="UserQueryTemplateResultMap">
-        SELECT * FROM user_query_template
+        SELECT id, question, generated_sql, datasource_id, total_score, rating_count, avg_score, created_at, updated_at
+        FROM user_query_template
         WHERE question = #{question} AND generated_sql = #{sql}
         LIMIT 1
     </select>
@@ -31,21 +32,23 @@
     </insert>
 
     <select id="findById" resultMap="UserQueryTemplateResultMap">
-        SELECT * FROM user_query_template WHERE id = #{id}
+        SELECT id, question, generated_sql, datasource_id, total_score, rating_count, avg_score, created_at, updated_at
+        FROM user_query_template
+        WHERE id = #{id}
     </select>
 
     <update id="updateScoreOnSatisfied">
         UPDATE user_query_template
         SET total_score = total_score + 1,
             rating_count = rating_count + 1,
-            avg_score = (total_score + 1) / (rating_count + 1)
+            avg_score = ROUND((total_score + 1.0) / (rating_count + 1), 2)
         WHERE id = #{id}
     </update>
 
     <update id="updateScoreOnUnsatisfied">
         UPDATE user_query_template
         SET rating_count = rating_count + 1,
-            avg_score = total_score / (rating_count + 1)
+            avg_score = ROUND(total_score * 1.0 / (rating_count + 1), 2)
         WHERE id = #{id}
     </update>
 

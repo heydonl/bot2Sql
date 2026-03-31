@@ -18,6 +18,16 @@ public class UserQueryTemplateService {
     }
 
     public UserQueryTemplate create(String question, String sql, Long datasourceId) {
+        if (question == null || question.isBlank()) {
+            throw new IllegalArgumentException("问题不能为空");
+        }
+        if (sql == null || sql.isBlank()) {
+            throw new IllegalArgumentException("SQL 不能为空");
+        }
+        if (datasourceId == null) {
+            throw new IllegalArgumentException("数据源 ID 不能为空");
+        }
+
         UserQueryTemplate template = new UserQueryTemplate();
         template.setQuestion(question);
         template.setGeneratedSql(sql);
@@ -32,12 +42,20 @@ public class UserQueryTemplateService {
     }
 
     public void updateScoreOnSatisfied(Long id) {
-        mapper.updateScoreOnSatisfied(id);
-        log.info("更新用户模板评分（满意）: id={}", id);
+        int updateCount = mapper.updateScoreOnSatisfied(id);
+        if (updateCount == 0) {
+            log.warn("更新用户模板评分失败，记录不存在: id={}", id);
+        } else {
+            log.info("更新用户模板评分（满意）: id={}, 更新记录数={}", id, updateCount);
+        }
     }
 
     public void updateScoreOnUnsatisfied(Long id) {
-        mapper.updateScoreOnUnsatisfied(id);
-        log.info("更新用户模板评分（不满意）: id={}", id);
+        int updateCount = mapper.updateScoreOnUnsatisfied(id);
+        if (updateCount == 0) {
+            log.warn("更新用户模板评分失败，记录不存在: id={}", id);
+        } else {
+            log.info("更新用户模板评分（不满意）: id={}, 更新记录数={}", id, updateCount);
+        }
     }
 }
