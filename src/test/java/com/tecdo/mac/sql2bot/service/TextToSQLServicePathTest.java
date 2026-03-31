@@ -72,6 +72,12 @@ class TextToSQLServicePathTest {
     private TemplateVectorSearchService templateVectorSearchService;
 
     @Mock
+    private TemplateVectorStoreService templateVectorStoreService;
+
+    @Mock
+    private UserQueryTemplateService userQueryTemplateService;
+
+    @Mock
     private ModelService modelService;
 
     @Mock
@@ -182,7 +188,7 @@ class TextToSQLServicePathTest {
         // 验证结果
         assertNotNull(response);
         assertTrue(response.getSuccess());
-        assertEquals("通过模板匹配生成查询", response.getExplanation());
+        assertEquals("通过系统模板匹配生成查询", response.getExplanation());
         assertTrue(response.isFromTemplate());
         assertEquals(1L, response.getTemplateId());
         assertEquals(0.85, response.getTemplateSimilarity(), 0.01);
@@ -261,6 +267,11 @@ class TextToSQLServicePathTest {
         testRequest.setSatisfied(false);
         testRequest.setRetryQueryLogId(100L);
 
+        // Mock 查询日志
+        QueryLog queryLog = createTestQueryLog();
+        queryLog.setSourceType("bfs");
+        when(queryLogService.findById(100L)).thenReturn(queryLog);
+
         // Mock 高召回搜索结果
         mockPath3Dependencies();
 
@@ -273,6 +284,7 @@ class TextToSQLServicePathTest {
         assertEquals("通过BFS表发现生成查询", response.getExplanation());
 
         // 验证路径3的关键调用（使用更高的top-k值）
+        verify(queryLogService).updateSatisfied(100L, false);
         verify(schemaVectorStoreService).searchSchemas(anyString(), isNull(), eq(20));
     }
 
@@ -284,23 +296,42 @@ class TextToSQLServicePathTest {
         // 设置用户满意的请求
         testRequest.setSatisfied(true);
         testRequest.setRetryQueryLogId(100L);
+        testRequest.setConversationId(1L); // 设置会话ID，避免创建新会话
 
         QueryLog satisfiedQueryLog = createTestQueryLog();
+        satisfiedQueryLog.setSourceType("bfs"); // 非系统模板来源
         when(queryLogService.findById(100L)).thenReturn(satisfiedQueryLog);
+        when(conversationService.belongsToUser(1L, 1L)).thenReturn(true);
 
-        // Mock 其他依赖
-        mockPath2Dependencies();
+        // Mock 用户模板创建
+        com.tecdo.mac.sql2bot.domain.UserQueryTemplate newTemplate =
+            new com.tecdo.mac.sql2bot.domain.UserQueryTemplate();
+        newTemplate.setId(1L);
+        newTemplate.setQuestion(satisfiedQueryLog.getQuestion());
+        newTemplate.setGeneratedSql(satisfiedQueryLog.getGeneratedSql());
+
+        when(userQueryTemplateService.findByQuestionAndSql(anyString(), anyString()))
+            .thenReturn(null);
+        when(userQueryTemplateService.create(anyString(), anyString(), isNull()))
+            .thenReturn(newTemplate);
 
         // 执行测试
         QueryResponse response = textToSQLService.processQuery(testRequest);
 
-        // 验证向量索引调用
+        // 验证结果 - 用户满意时直接返回成功响应
+        assertNotNull(response);
+        assertTrue(response.getSuccess());
+        assertEquals("感谢您的反馈", response.getExplanation());
+
+        // 验证用户模板创建和向量索引调用
         verify(queryLogService).findById(100L);
-        verify(schemaVectorStoreService).indexQuestionAnswer(
-            eq(satisfiedQueryLog.getId()),
+        verify(queryLogService).updateSatisfied(100L, true);
+        verify(userQueryTemplateService).create(
             eq(satisfiedQueryLog.getQuestion()),
-            eq(satisfiedQueryLog.getGeneratedSql())
+            eq(satisfiedQueryLog.getGeneratedSql()),
+            isNull()
         );
+        verify(templateVectorStoreService).indexUserTemplate(eq(newTemplate));
     }
 
     /**
@@ -321,11 +352,20 @@ class TextToSQLServicePathTest {
         verify(schemaVectorStoreService).searchSchemas(anyString(), isNull(), eq(10)); // schema.search.top-k
 
         // 测试路径3的配置参数
-        testRequest.setSatisfied(false);
-        testRequest.setRetryQueryLogId(100L);
+        QueryRequest retryRequest = new QueryRequest();
+        retryRequest.setUserId(1L);
+        retryRequest.setQuestion("查询广告主123的消费数据");
+        retryRequest.setSatisfied(false);
+        retryRequest.setRetryQueryLogId(100L);
+
+        // Mock 查询日志
+        QueryLog queryLog = createTestQueryLog();
+        queryLog.setSourceType("bfs");
+        when(queryLogService.findById(100L)).thenReturn(queryLog);
+
         mockPath3Dependencies();
 
-        textToSQLService.processQuery(testRequest);
+        textToSQLService.processQuery(retryRequest);
         verify(schemaVectorStoreService).searchSchemas(anyString(), isNull(), eq(20)); // schema.search.bfs-retry-top-k
     }
 
@@ -414,6 +454,7 @@ class TextToSQLServicePathTest {
         queryLog.setQuestion("查询广告主消费数据");
         queryLog.setGeneratedSql("SELECT * FROM advertiser WHERE id = 123");
         queryLog.setIntentJson("{\"tables\":[{\"name\":\"advertiser\",\"database\":\"test_db\"}]}");
+        queryLog.setSatisfied(null); // 确保 satisfied 为 null，允许评价
         return queryLog;
     }
 
