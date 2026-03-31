@@ -6,6 +6,7 @@ import com.tecdo.mac.sql2bot.domain.Conversation;
 import com.tecdo.mac.sql2bot.domain.QueryLog;
 import com.tecdo.mac.sql2bot.domain.QueryStepLog;
 import com.tecdo.mac.sql2bot.domain.QueryTemplate;
+import com.tecdo.mac.sql2bot.domain.UserQueryTemplate;
 import com.tecdo.mac.sql2bot.dto.QueryRequest;
 import com.tecdo.mac.sql2bot.dto.QueryResponse;
 import com.tecdo.mac.sql2bot.dto.SqlStep;
@@ -14,6 +15,7 @@ import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,6 +55,8 @@ public class TextToSQLService {
     private final DataSourceService dataSourceService;
     private final DatabaseService databaseService;
     private final QueryStepLogService queryStepLogService;
+    private final UserQueryTemplateService userQueryTemplateService;
+    private final TemplateVectorStoreService templateVectorStoreService;
 
     // RAG模板检索配置
     private static final int MAX_TEMPLATE_CANDIDATES = 5;
@@ -103,21 +107,17 @@ public class TextToSQLService {
                 messageService.saveUserMessage(conversationId, request.getQuestion());
             }
 
-            // 4. 用户满意，将问答对存入向量索引
-            if (Boolean.TRUE.equals(request.getSatisfied()) && request.getRetryQueryLogId() != null) {
-                try {
-                    QueryLog queryLog = queryLogService.findById(request.getRetryQueryLogId());
-                    if (queryLog != null) {
-                        schemaVectorStoreService.indexQuestionAnswer(
-                            queryLog.getId(),
-                            queryLog.getQuestion(),
-                            queryLog.getGeneratedSql()
-                        );
-                        log.info("用户满意，已将问答对存入向量索引: queryLogId={}", request.getRetryQueryLogId());
-                    }
-                } catch (Exception e) {
-                    log.error("存入问答向量索引失败", e);
+            // 4. 处理用户反馈
+            if (request.getSatisfied() != null && request.getRetryQueryLogId() != null) {
+                handleUserFeedback(request);
+
+                if (Boolean.TRUE.equals(request.getSatisfied())) {
+                    QueryResponse response = new QueryResponse();
+                    response.setSuccess(true);
+                    response.setExplanation("感谢您的反馈");
+                    return response;
                 }
+                // 不满意，继续执行后续流程生成新答案
             }
 
             // 5. 路径3：用户不满意，直接走高召回 BFS 路径
@@ -125,38 +125,82 @@ public class TextToSQLService {
                 log.info("用户不满意，触发BFS高召回重试: queryLogId={}", request.getRetryQueryLogId());
                 List<SqlStep> steps = generatePlanByBFSWithHighRecall(request.getQuestion());
                 return executePlan(request.getQuestion(), steps, conversationId, request,
-                    null, false, 0.0, startTime);
+                    null, "bfs", 0.0, startTime);
             }
 
-            // 6. 路径1：RAG 模板检索（高准确性）
+            // 6. 路径1：RAG 模板检索（高准确性）- 支持用户模板和系统模板
             QueryTemplate matchedTemplate = null;
+            UserQueryTemplate matchedUserTemplate = null;
             double templateSimilarity = 0.0;
             log.info("开始RAG模板检索: question={}", request.getQuestion());
+
+            // 先搜索用户模板
             try {
-                List<TemplateVectorSearchService.TemplateSearchResult> templateResults =
-                    templateVectorSearchService.searchSimilarTemplates(
+                List<TemplateVectorStoreService.TemplateSearchResult> userTemplateResults =
+                    templateVectorStoreService.searchSimilarUserTemplates(
                         request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
-                if (!templateResults.isEmpty()) {
-                    TemplateVectorSearchService.TemplateSearchResult bestMatch = templateResults.get(0);
+                if (!userTemplateResults.isEmpty()) {
+                    TemplateVectorStoreService.TemplateSearchResult bestMatch = userTemplateResults.get(0);
                     templateSimilarity = bestMatch.getSimilarity();
                     if (templateSimilarity >= templateSearchSimilarityThreshold) {
-                        QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
+                        UserQueryTemplate candidate = userQueryTemplateService.findById(bestMatch.getMeta().getTemplateId());
                         if (candidate != null) {
-                            matchedTemplate = candidate;
-                            log.info("RAG模板匹配成功: templateId={}, similarity={}",
-                                    matchedTemplate.getId(), templateSimilarity);
+                            matchedUserTemplate = candidate;
+                            log.info("用户模板匹配成功: userTemplateId={}, similarity={}",
+                                    matchedUserTemplate.getId(), templateSimilarity);
                         }
-                    } else {
-                        log.info("模板相似度不足，降级到路径2: similarity={}, threshold={}",
-                            templateSimilarity, templateSearchSimilarityThreshold);
                     }
-                } else {
-                    log.info("未找到符合条件的SQL模板，降级到路径2");
                 }
             } catch (Exception e) {
-                log.error("RAG模板检索失败，降级到路径2", e);
+                log.error("用户模板检索失败", e);
             }
 
+            // 如果用户模板未匹配，再搜索系统模板
+            if (matchedUserTemplate == null) {
+                try {
+                    List<TemplateVectorSearchService.TemplateSearchResult> templateResults =
+                        templateVectorSearchService.searchSimilarTemplates(
+                            request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
+                    if (!templateResults.isEmpty()) {
+                        TemplateVectorSearchService.TemplateSearchResult bestMatch = templateResults.get(0);
+                        templateSimilarity = bestMatch.getSimilarity();
+                        if (templateSimilarity >= templateSearchSimilarityThreshold) {
+                            QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
+                            if (candidate != null) {
+                                matchedTemplate = candidate;
+                                log.info("系统模板匹配成功: templateId={}, similarity={}",
+                                        matchedTemplate.getId(), templateSimilarity);
+                            }
+                        } else {
+                            log.info("模板相似度不足，降级到路径2: similarity={}, threshold={}",
+                                templateSimilarity, templateSearchSimilarityThreshold);
+                        }
+                    } else {
+                        log.info("未找到符合条件的SQL模板，降级到路径2");
+                    }
+                } catch (Exception e) {
+                    log.error("系统模板检索失败，降级到路径2", e);
+                }
+            }
+
+            // 处理用户模板匹配
+            if (matchedUserTemplate != null) {
+                try {
+                    List<SqlStep> steps = parseSqlSteps(matchedUserTemplate.getGeneratedSql());
+                    if (steps == null || steps.isEmpty()) {
+                        log.warn("用户模板SQL解析失败，降级到路径2: userTemplateId={}", matchedUserTemplate.getId());
+                    } else {
+                        log.info("路径1 用户模板匹配成功: userTemplateId={}, steps={}", matchedUserTemplate.getId(), steps.size());
+                        return executePlan(request.getQuestion(), steps, conversationId, request,
+                            matchedUserTemplate.getId(), "user_template", templateSimilarity, startTime);
+                    }
+                } catch (Exception e) {
+                    log.error("路径1 用户模板处理失败，降级到路径2", e);
+                }
+            }
+
+            // 处理系统模板匹配
+            // 处理系统模板匹配
             if (matchedTemplate != null) {
                 try {
                     // 路径1：使用 LLM 基于模板和示例生成参数填充的执行计划
@@ -171,7 +215,7 @@ public class TextToSQLService {
                         queryTemplateService.incrementUsageCount(matchedTemplate.getId());
                         log.info("路径1 参数填充成功: templateId={}, steps={}", matchedTemplate.getId(), steps.size());
                         return executePlan(request.getQuestion(), steps, conversationId, request,
-                            matchedTemplate.getId(), true, templateSimilarity, startTime);
+                            matchedTemplate.getId(), "system_template", templateSimilarity, startTime);
                     }
                 } catch (Exception e) {
                     log.error("路径1 处理失败，降级到路径2", e);
@@ -182,7 +226,7 @@ public class TextToSQLService {
             log.info("进入路径2: Schema RAG + BFS扩表 + LLM");
             List<SqlStep> steps = generatePlanByBFSNormal(request.getQuestion());
             return executePlan(request.getQuestion(), steps, conversationId, request,
-                null, false, 0.0, startTime);
+                null, "bfs", 0.0, startTime);
 
         } catch (Exception e) {
             log.error("Failed to process query", e);
@@ -190,6 +234,50 @@ public class TextToSQLService {
                 messageService.saveErrorMessage(request.getConversationId(), e.getMessage());
             }
             return QueryResponse.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 处理用户反馈
+     */
+    @Transactional
+    private void handleUserFeedback(QueryRequest request) {
+        Long queryLogId = request.getRetryQueryLogId();
+        Boolean satisfied = request.getSatisfied();
+
+        QueryLog queryLog = queryLogService.findById(queryLogId);
+        if (queryLog == null) {
+            throw new IllegalArgumentException("查询记录不存在: id=" + queryLogId);
+        }
+
+        if (queryLog.getSatisfied() != null) {
+            throw new IllegalStateException("该查询已评价过: id=" + queryLogId);
+        }
+
+        queryLogService.updateSatisfied(queryLogId, satisfied);
+
+        // 来自系统模板的查询不沉淀为用户模板
+        if ("system_template".equals(queryLog.getSourceType())) {
+            return;
+        }
+
+        String question = queryLog.getQuestion();
+        String sql = queryLog.getGeneratedSql();
+
+        if (Boolean.TRUE.equals(satisfied)) {
+            UserQueryTemplate existing = userQueryTemplateService.findByQuestionAndSql(question, sql);
+
+            if (existing == null) {
+                UserQueryTemplate newTemplate = userQueryTemplateService.create(question, sql, queryLog.getDatasourceId());
+                templateVectorStoreService.indexUserTemplate(newTemplate);
+            } else {
+                userQueryTemplateService.updateScoreOnSatisfied(existing.getId());
+            }
+        } else {
+            if ("user_template".equals(queryLog.getSourceType())) {
+                Long templateId = queryLog.getSourceTemplateId();
+                userQueryTemplateService.updateScoreOnUnsatisfied(templateId);
+            }
         }
     }
 
@@ -414,7 +502,7 @@ public class TextToSQLService {
      */
     private QueryResponse executePlan(String question, List<SqlStep> steps,
             Long conversationId, QueryRequest request,
-            Long templateId, boolean isFromTemplate,
+            Long sourceTemplateId, String sourceType,
             double templateSimilarity, long startTime) {
 
         if (steps == null || steps.isEmpty()) {
@@ -423,7 +511,9 @@ public class TextToSQLService {
             return QueryResponse.error(err);
         }
 
-        String explanation = isFromTemplate ? "通过模板匹配生成查询" : "通过BFS表发现生成查询";
+        String explanation = "system_template".equals(sourceType) ? "通过系统模板匹配生成查询" :
+                             "user_template".equals(sourceType) ? "通过用户模板匹配生成查询" :
+                             "通过BFS表发现生成查询";
         List<Map<String, Object>> prevResult = null;
         String lastFilledSql = null;
         Long lastDatasourceId = null;
@@ -505,8 +595,11 @@ public class TextToSQLService {
                     queryLog.setUserId(request.getUserId());
                     queryLog.setConversationId(conversationId);
                     queryLog.setQuestion(question);
-                    queryLog.setTemplateId(templateId);
-                    queryLog.setIsFromTemplate(isFromTemplate);
+                    queryLog.setTemplateId(sourceTemplateId);
+                    queryLog.setIsFromTemplate(sourceTemplateId != null);
+                    queryLog.setSourceType(sourceType);
+                    queryLog.setSourceTemplateId(sourceTemplateId);
+                    queryLog.setRetryFromId(request.getRetryQueryLogId());
                     queryLog.setGeneratedSql(filledSql);
                     queryLog.setExecutionSuccess(false);
                     queryLog.setExecutionTime(System.currentTimeMillis() - startTime);
@@ -530,8 +623,11 @@ public class TextToSQLService {
             queryLog.setUserId(request.getUserId());
             queryLog.setConversationId(conversationId);
             queryLog.setQuestion(question);
-            queryLog.setTemplateId(templateId);
-            queryLog.setIsFromTemplate(isFromTemplate);
+            queryLog.setTemplateId(sourceTemplateId);
+            queryLog.setIsFromTemplate(sourceTemplateId != null);
+            queryLog.setSourceType(sourceType);
+            queryLog.setSourceTemplateId(sourceTemplateId);
+            queryLog.setRetryFromId(request.getRetryQueryLogId());
             queryLog.setGeneratedSql(lastFilledSql);
             queryLog.setExecutionSuccess(true);
             queryLog.setResultCount(prevResult.size());
@@ -555,8 +651,8 @@ public class TextToSQLService {
         long totalTime = System.currentTimeMillis() - startTime;
         QueryResponse response = QueryResponse.success(conversationId, lastFilledSql, explanation, prevResult, totalTime);
         response.setQueryLogId(queryLogId);
-        response.setTemplateId(templateId);
-        response.setFromTemplate(isFromTemplate);
+        response.setTemplateId(sourceTemplateId);
+        response.setFromTemplate(sourceTemplateId != null);
         response.setTemplateSimilarity(templateSimilarity);
         return response;
     }

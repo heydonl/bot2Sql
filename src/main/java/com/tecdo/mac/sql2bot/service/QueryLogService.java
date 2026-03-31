@@ -111,6 +111,15 @@ public class QueryLogService {
     }
 
     /**
+     * 更新用户满意度
+     */
+    @Transactional
+    public void updateSatisfied(Long id, Boolean satisfied) {
+        queryLogMapper.updateSatisfied(id, satisfied);
+        log.info("更新用户满意度: id={}, satisfied={}", id, satisfied);
+    }
+
+    /**
      * 获取最近的高评分查询示例（用于参数填充提示词）
      */
     public QueryLog getBestRecentExample(Long datasourceId) {
