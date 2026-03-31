@@ -22,5 +22,9 @@ public class QueryLog {
     private java.math.BigDecimal score;
     private Boolean isLabeled;
     private Long datasourceId;
+    private Boolean satisfied;  // 用户是否满意（NULL=未评价，TRUE=满意，FALSE=不满意）
+    private Long retryFromId;  // 重试来源的query_log ID
+    private String sourceType;  // 来源类型（user_template, system_template, bfs）
+    private Long sourceTemplateId;  // 来源模板ID
     private LocalDateTime createdAt;
 }

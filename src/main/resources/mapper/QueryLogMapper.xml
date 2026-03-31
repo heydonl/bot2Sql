@@ -21,6 +21,10 @@
         <result column="score" property="score"/>
         <result column="is_labeled" property="isLabeled"/>
         <result column="datasource_id" property="datasourceId"/>
+        <result column="satisfied" property="satisfied"/>
+        <result column="retry_from_id" property="retryFromId"/>
+        <result column="source_type" property="sourceType"/>
+        <result column="source_template_id" property="sourceTemplateId"/>
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
@@ -29,11 +33,13 @@
         INSERT INTO query_log (
             user_id, conversation_id, question, intent, intent_json,
             skeleton, template_id, is_from_template, generated_sql,
-            execution_success, execution_time, result_count, datasource_id
+            execution_success, execution_time, result_count, datasource_id,
+            satisfied, retry_from_id, source_type, source_template_id
         ) VALUES (
             #{userId}, #{conversationId}, #{question}, #{intent}, #{intentJson},
             #{skeleton}, #{templateId}, #{isFromTemplate}, #{generatedSql},
-            #{executionSuccess}, #{executionTime}, #{resultCount}, #{datasourceId}
+            #{executionSuccess}, #{executionTime}, #{resultCount}, #{datasourceId},
+            #{satisfied}, #{retryFromId}, #{sourceType}, #{sourceTemplateId}
         )
     </insert>
 
@@ -109,6 +115,12 @@
         WHERE id = #{id}
     </update>
 
+    <update id="updateSatisfied">
+        UPDATE query_log
+        SET satisfied = #{satisfied}
+        WHERE id = #{id}
+    </update>
+
     <select id="getIntentDistribution" resultType="map">
         SELECT intent, COUNT(*) as count
         FROM query_log
@@ -167,6 +179,19 @@
           </if>
         ORDER BY rating DESC, created_at DESC
         LIMIT #{limit}
+    </select>
+
+    <select id="findByQuestionAndSql" resultMap="BaseResultMap">
+        SELECT id, user_id, conversation_id, question, intent, intent_json, skeleton,
+               template_id, is_from_template, generated_sql, execution_success,
+               execution_time, result_count, rating, score, is_labeled, datasource_id,
+               satisfied, retry_from_id, source_type, source_template_id, created_at
+        FROM query_log
+        WHERE question = #{question}
+          AND generated_sql = #{sql}
+          AND datasource_id = #{datasourceId}
+        ORDER BY created_at DESC
+        LIMIT 1
     </select>
 
 </mapper>

@@ -57,4 +57,10 @@ public interface QueryLogMapper {
         @Param("datasourceId") Long datasourceId,
         @Param("limit") int limit
     );
+
+    int updateSatisfied(@Param("id") Long id, @Param("satisfied") Boolean satisfied);
+
+    QueryLog findByQuestionAndSql(@Param("question") String question,
+                                  @Param("sql") String sql,
+                                  @Param("datasourceId") Long datasourceId);
 }
