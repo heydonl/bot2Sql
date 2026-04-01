@@ -188,7 +188,7 @@ class TextToSQLServicePathTest {
         // 验证结果
         assertNotNull(response);
         assertTrue(response.getSuccess());
-        assertEquals("通过系统模板匹配生成查询", response.getExplanation());
+        assertEquals("通过意图Few-shot匹配生成查询", response.getExplanation());
         assertTrue(response.isFromTemplate());
         assertEquals(1L, response.getTemplateId());
         assertEquals(0.85, response.getTemplateSimilarity(), 0.01);

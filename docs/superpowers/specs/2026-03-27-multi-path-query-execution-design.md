@@ -198,7 +198,7 @@ private String buildExampleContext(List<SqlStep> intentSteps) {
         // 处理表信息
         if (step.getTables() != null) {
             for (TableInfo tableInfo : step.getTables()) {
-                String tableKey = tableInfo.getDatabase() + "." + tableInfo.getName();
+                String tableKey = step.getDatasourceId() + "." + tableInfo.getDatabase() + "." + tableInfo.getName();
 
                 if (!processedTables.contains(tableKey)) {
                     // 根据database和table name查找Model
@@ -435,11 +435,8 @@ private List<SqlStep> generatePlanWithBFSContext(String question, Set<Long> mode
         columnsMap.put(modelId, columnDefinitionService.getByModelId(modelId));
     }
 
-    // 2. 过滤表关系（只保留两端都在models中的关系）
-    List<Relationship> relationships = relationshipService.listAll().stream()
-        .filter(r -> validModelIds.contains(r.getFromModelId())
-                  && validModelIds.contains(r.getToModelId()))
-        .collect(Collectors.toList());
+    // 2. 获取相关表关系（基于BFS扩展的表获取关系）
+    List<Relationship> relationships = relationshipService.getByModelIds(new ArrayList<>(modelIds));
 
     // 3. 获取Few-Shot示例
     String fewShot = intentFewShotService.getFewShotExamples(null, question);
@@ -538,52 +535,64 @@ private List<SqlStep> generatePlanByBFSWithHighRecall(String question) {
 #### 3.1.1 流程图
 
 ```
-接收 SqlStep 列表
+接收 SqlStep 列表（已包含完整参数）
   ↓
-初始化：prevResult = null
+初始化：stepResults = new HashMap<String, List<Map>>()
   ↓
 遍历每个 SqlStep
   ↓
-  ├─ 获取参考示例（getBestRecentExample）
-  ├─ 构建参数填充Prompt（包含上一步结果）
-  ├─ LLM填充参数 → 生成完整SQL
-  ├─ 推断数据源ID（如未指定）
+  ├─ 从 step.params 获取当前步骤参数
+  ├─ 处理依赖参数（如 {{step1.task_status}}）
+  │   └─ 从 stepResults.get("step1") 中提取对应字段值
+  ├─ 替换 sql_template 中的占位符 → 生成完整SQL
+  ├─ 使用 step.datasource_id 确定数据源
   ├─ 执行SQL → 获取结果
-  └─ 更新 prevResult = 当前结果
+  └─ 保存结果：stepResults.put(step.id, 当前结果)
   ↓
 记录查询日志
   ↓
 保存助手消息到会话
   ↓
-返回最终结果
+返回最终结果（最后一步的结果）
 ```
 
 #### 3.1.2 关键实现
 
 **参数填充Prompt构建**
 ```java
-private String buildParamFillingPrompt(String question, String sqlTemplate,
-                                        List<Map<String, Object>> prevResult,
-                                        QueryLog example) {
+private String buildParamFillingPrompt(String template, String userQuestion, String exampleContext) {
     StringBuilder sb = new StringBuilder();
-    sb.append("你是一个SQL参数填充专家。根据以下信息，将SQL模板中的{{param}}占位符替换为具体值。\n\n");
-    sb.append("SQL模板:\n").append(sqlTemplate).append("\n\n");
+    sb.append("# 角色\n");
+    sb.append("你是一名 SQL 专家，擅长根据用户问题生成多步骤的 SQL 执行计划。\n\n");
 
-    if (prevResult != null && !prevResult.isEmpty()) {
-        List<Map<String, Object>> truncated = prevResult.size() > 100
-            ? prevResult.subList(0, 100) : prevResult;
-        sb.append("上一步查询结果（最多100行）:\n")
-          .append(objectMapper.writeValueAsString(truncated)).append("\n\n");
+    sb.append("# 任务\n");
+    sb.append("你将获得一组预定义的 SQL 模板（JSON 数组形式），每个模板包含一个 SQL 片段、参数说明、输出字段说明等信息。\n");
+    sb.append("你需要根据用户的最新问题，从模板中选出合适的步骤，并为每个步骤填充具体的参数值（`params` 字段），最终输出一个 JSON 数组，结构与输入模板保持一致。\n\n");
+
+    sb.append("# 模板说明\n");
+    sb.append("- 模板中的 `sql_template` 包含占位符 `{{xxx}}`，你需要在params中写出实际值。\n");
+    sb.append("- `paramDescs` 列出了每个参数的含义，你需要从用户问题中提取对应的值。\n");
+    sb.append("- 如果某个参数依赖前一步的输出（如 `{{step1.工单状态}}`），在生成当前步骤的 `params` 时，不需要为它生成值。\n");
+    sb.append("- `outputParamsDesc` 说明该步骤返回的字段，供后续步骤引用。\n");
+    sb.append("- `tables`说明当前sql模板的表名和对应的数据库\n");
+    sb.append("- `datasource_id`代表数据源id\n");
+    sb.append("- 时间范围类参数需根据用户描述进行合理转换，例如"到现在"应替换为当前日期（或次日，若 SQL 使用 `< endDate`）。\n\n");
+
+    if (exampleContext != null && !exampleContext.isEmpty()) {
+        sb.append("# 示例上下文\n");
+        sb.append(exampleContext).append("\n\n");
     }
 
-    if (example != null) {
-        sb.append("参考示例（高评分历史问答）:\n");
-        sb.append("问题: ").append(example.getQuestion()).append("\n");
-        sb.append("SQL: ").append(example.getGeneratedSql()).append("\n\n");
-    }
+    sb.append("初始模板如下:\n");
+    sb.append("```json\n").append(template).append("\n```\n\n");
 
-    sb.append("用户问题:\n").append(question).append("\n\n");
-    sb.append("要求：只返回填充完成的SQL语句，不要额外解释。");
+    sb.append("**现在的问题**:\n").append(userQuestion).append("\n\n");
+
+    sb.append("**预期的输出**:\n");
+    sb.append("```json\n```\n");
+    sb.append("# 预期的输出说明:\n");
+    sb.append("- 请使用```json```包裹着，并且被包裹着的的确是个json数组\n");
+
     return sb.toString();
 }
 ```
@@ -604,16 +613,23 @@ if (datasourceId == null) {
 
 假设用户问题："获取2025年7月到现在，充值工单状态排名前五的工单ID"
 
+LLM已经在路径1/2/3中生成了完整的执行计划JSON，现在executePlan开始执行：
+
 **Step 1: 统计工单状态**
 ```json
 {
   "id": "step1",
   "sql_template": "SELECT CONCAT(stage, '-', status) AS task_status, COUNT(*) AS task_count FROM task WHERE create_time >= {{startDate}} AND create_time < {{endDate}} AND type = {{type}} GROUP BY stage, status ORDER BY task_count DESC LIMIT 5",
+  "params": {
+    "startDate": "2025-07-01",
+    "endDate": "2026-03-27",
+    "type": 30
+  },
   "datasource_id": 1
 }
 ```
 
-LLM填充参数后执行：
+系统替换占位符后执行：
 ```sql
 SELECT CONCAT(stage, '-', status) AS task_status, COUNT(*) AS task_count
 FROM task
@@ -622,7 +638,7 @@ GROUP BY stage, status
 ORDER BY task_count DESC LIMIT 5
 ```
 
-执行结果（prevResult）：
+执行结果保存到 stepResults.put("step1", result)：
 ```json
 [
   {"task_status": "2-1", "task_count": 150},
@@ -638,11 +654,14 @@ ORDER BY task_count DESC LIMIT 5
 {
   "id": "step2",
   "sql_template": "SELECT task_id FROM task WHERE CONCAT(stage, '-', status) IN ({{step1.task_status}}) AND type = {{type}}",
+  "params": {
+    "type": 30
+  },
   "datasource_id": 1
 }
 ```
 
-LLM接收到上一步结果，填充参数：
+系统从 stepResults.get("step1") 提取 task_status 字段值，替换占位符：
 ```sql
 SELECT task_id
 FROM task
@@ -652,18 +671,38 @@ AND type = 30
 
 #### 3.2.2 关键机制
 
-**上一步结果截断**
+**步骤结果存储**
 ```java
-List<Map<String, Object>> truncated = prevResult.size() > 100
-    ? prevResult.subList(0, 100) : prevResult;
+Map<String, List<Map<String, Object>>> stepResults = new HashMap<>();
+// 执行每个步骤后
+stepResults.put(step.getId(), currentResult);
 ```
-- 限制传递给LLM的结果行数，避免Token超限
-- 保留前100行，通常足够LLM理解数据结构
+- 使用Map存储所有步骤的结果，key为步骤ID（如"step1"、"step2"）
+- 后续步骤可以引用任意前面步骤的结果
 
 **参数引用解析**
-- LLM需要识别 `{{step1.task_status}}` 这样的引用
-- 从 prevResult 中提取对应字段的值
-- 转换为SQL的IN子句格式
+```java
+// 解析依赖参数，如 {{step1.task_status}}
+if (paramValue.startsWith("{{") && paramValue.endsWith("}}")) {
+    String ref = paramValue.substring(2, paramValue.length() - 2);
+    String[] parts = ref.split("\\.");
+    String stepId = parts[0];  // "step1"
+    String fieldName = parts[1];  // "task_status"
+
+    List<Map<String, Object>> stepResult = stepResults.get(stepId);
+    List<Object> values = stepResult.stream()
+        .map(row -> row.get(fieldName))
+        .collect(Collectors.toList());
+
+    // 转换为SQL的IN子句格式
+    String inClause = values.stream()
+        .map(v -> "'" + v + "'")
+        .collect(Collectors.joining(", "));
+}
+```
+- 系统自动识别 `{{step1.task_status}}` 这样的依赖引用
+- 从 stepResults 中提取对应步骤的对应字段值
+- 转换为SQL的IN子句格式或其他适当格式
 
 ### 3.3 错误处理与降级
 
@@ -671,12 +710,19 @@ List<Map<String, Object>> truncated = prevResult.size() > 100
 
 ```java
 try {
-    prevResult = queryExecutorService.executeQuery(datasourceId, filledSql);
+    result = queryExecutorService.executeQuery(datasourceId, filledSql);
+    stepResults.put(step.getId(), result);
 } catch (Exception e) {
-    // 记录失败日志
+    log.error("步骤 {} 执行失败: {}", step.getId(), e.getMessage());
+
+    // 记录整个执行计划的失败日志
     QueryLog queryLog = new QueryLog();
+    queryLog.setUserId(request.getUserId());
+    queryLog.setConversationId(conversationId);
+    queryLog.setQuestion(question);
+    queryLog.setIntentJson(objectMapper.writeValueAsString(steps));  // 记录完整的执行计划JSON
     queryLog.setExecutionSuccess(false);
-    queryLog.setGeneratedSql(filledSql);
+    queryLog.setErrorMessage("步骤 " + step.getId() + " 执行失败: " + e.getMessage());
     queryLogService.logQuery(queryLog);
 
     // 返回错误响应
@@ -685,83 +731,374 @@ try {
 ```
 
 - 任何步骤执行失败，整个计划终止
-- 记录失败日志，包含生成的SQL和错误信息
+- 记录整个执行计划的JSON到intent_json字段
+- 记录失败信息和错误原因
 - 返回错误响应给用户
 
 #### 3.3.2 成功日志记录
 
 ```java
+// 所有步骤执行成功后，记录整个执行计划
 QueryLog queryLog = new QueryLog();
 queryLog.setUserId(request.getUserId());
 queryLog.setConversationId(conversationId);
 queryLog.setQuestion(question);
 queryLog.setTemplateId(templateId);
 queryLog.setIsFromTemplate(isFromTemplate);
-queryLog.setGeneratedSql(lastFilledSql);
+queryLog.setIntentJson(objectMapper.writeValueAsString(steps));  // 记录完整的执行计划JSON
 queryLog.setExecutionSuccess(true);
-queryLog.setResultCount(prevResult.size());
-queryLog.setDatasourceId(lastDatasourceId);
+queryLog.setResultCount(stepResults.get(steps.get(steps.size() - 1).getId()).size());  // 最后一步的结果数量
+queryLog.setDatasourceId(steps.get(0).getDatasourceId());  // 第一步的数据源ID
 queryLog.setExecutionTime(System.currentTimeMillis() - startTime);
 queryLogId = queryLogService.logQuery(queryLog);
 ```
 
-- 记录完整的查询上下文
+- 记录完整的执行计划JSON（包含所有步骤）到intent_json字段
+- 记录整体执行结果和耗时
 - 用于后续分析和优化
+
+**步骤级别日志（可选）**
+
+如果需要记录每个步骤的详细执行情况，建议创建新表 `query_step_log`：
+
+```sql
+CREATE TABLE query_step_log (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  query_log_id BIGINT NOT NULL COMMENT '关联的query_log主键',
+  step_id VARCHAR(50) NOT NULL COMMENT '步骤ID（如step1、step2）',
+  step_index INT NOT NULL COMMENT '步骤序号（从0开始）',
+  sql_template TEXT COMMENT 'SQL模板',
+  filled_sql TEXT COMMENT '填充参数后的完整SQL',
+  datasource_id BIGINT COMMENT '数据源ID',
+  execution_success BOOLEAN COMMENT '执行是否成功',
+  result_count INT COMMENT '结果行数',
+  execution_time BIGINT COMMENT '执行耗时（毫秒）',
+  error_message TEXT COMMENT '错误信息',
+  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_query_log_id (query_log_id),
+  INDEX idx_step_id (step_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='查询步骤执行日志表';
+```
+
+**实现逻辑**
+
+1. **领域实体类**
+```java
+@Data
+public class QueryStepLog {
+    private Long id;
+    private Long queryLogId;
+    private String stepId;
+    private Integer stepIndex;
+    private String sqlTemplate;
+    private String filledSql;
+    private Long datasourceId;
+    private Boolean executionSuccess;
+    private Integer resultCount;
+    private Long executionTime;
+    private String errorMessage;
+    private Date createTime;
+}
+```
+
+2. **Service层实现**
+```java
+@Service
+@RequiredArgsConstructor
+public class QueryStepLogService {
+    private final QueryStepLogMapper queryStepLogMapper;
+
+    /**
+     * 记录单个步骤的执行日志
+     */
+    public void logStep(QueryStepLog stepLog) {
+        queryStepLogMapper.insert(stepLog);
+    }
+
+    /**
+     * 批量记录步骤日志
+     */
+    public void logSteps(List<QueryStepLog> stepLogs) {
+        if (stepLogs != null && !stepLogs.isEmpty()) {
+            queryStepLogMapper.batchInsert(stepLogs);
+        }
+    }
+
+    /**
+     * 根据query_log_id查询所有步骤日志
+     */
+    public List<QueryStepLog> getByQueryLogId(Long queryLogId) {
+        return queryStepLogMapper.findByQueryLogId(queryLogId);
+    }
+}
+```
+
+3. **Mapper接口**
+```java
+@Mapper
+public interface QueryStepLogMapper {
+    void insert(QueryStepLog stepLog);
+    void batchInsert(@Param("stepLogs") List<QueryStepLog> stepLogs);
+    List<QueryStepLog> findByQueryLogId(@Param("queryLogId") Long queryLogId);
+}
+```
+
+4. **Mapper XML**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tecdo.mac.sql2bot.mapper.QueryStepLogMapper">
+
+    <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.QueryStepLog"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO query_step_log (
+            query_log_id, step_id, step_index, sql_template, filled_sql,
+            datasource_id, execution_success, result_count, execution_time, error_message
+        ) VALUES (
+            #{queryLogId}, #{stepId}, #{stepIndex}, #{sqlTemplate}, #{filledSql},
+            #{datasourceId}, #{executionSuccess}, #{resultCount}, #{executionTime}, #{errorMessage}
+        )
+    </insert>
+
+    <insert id="batchInsert" parameterType="java.util.List">
+        INSERT INTO query_step_log (
+            query_log_id, step_id, step_index, sql_template, filled_sql,
+            datasource_id, execution_success, result_count, execution_time, error_message
+        ) VALUES
+        <foreach collection="stepLogs" item="log" separator=",">
+            (#{log.queryLogId}, #{log.stepId}, #{log.stepIndex}, #{log.sqlTemplate}, #{log.filledSql},
+             #{log.datasourceId}, #{log.executionSuccess}, #{log.resultCount}, #{log.executionTime}, #{log.errorMessage})
+        </foreach>
+    </insert>
+
+    <select id="findByQueryLogId" resultType="com.tecdo.mac.sql2bot.domain.QueryStepLog">
+        SELECT * FROM query_step_log
+        WHERE query_log_id = #{queryLogId}
+        ORDER BY step_index ASC
+    </select>
+
+</mapper>
+```
+
+5. **在executePlan中集成步骤日志**
+```java
+private QueryResponse executePlan(List<SqlStep> steps, String question, Long conversationId, ...) {
+    long startTime = System.currentTimeMillis();
+    Map<String, List<Map<String, Object>>> stepResults = new HashMap<>();
+    List<QueryStepLog> stepLogs = new ArrayList<>();  // 收集所有步骤日志
+
+    // 遍历执行每个步骤
+    for (int i = 0; i < steps.size(); i++) {
+        SqlStep step = steps.get(i);
+        long stepStartTime = System.currentTimeMillis();
+
+        QueryStepLog stepLog = new QueryStepLog();
+        stepLog.setStepId(step.getId());
+        stepLog.setStepIndex(i);
+        stepLog.setSqlTemplate(step.getSqlTemplate());
+        stepLog.setDatasourceId(step.getDatasourceId());
+
+        try {
+            // 替换占位符生成完整SQL
+            String filledSql = replacePlaceholders(step, stepResults);
+            stepLog.setFilledSql(filledSql);
+
+            // 执行SQL
+            List<Map<String, Object>> result = queryExecutorService.executeQuery(
+                step.getDatasourceId(), filledSql);
+            stepResults.put(step.getId(), result);
+
+            // 记录成功信息
+            stepLog.setExecutionSuccess(true);
+            stepLog.setResultCount(result.size());
+            stepLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
+
+        } catch (Exception e) {
+            log.error("步骤 {} 执行失败: {}", step.getId(), e.getMessage());
+
+            // 记录失败信息
+            stepLog.setExecutionSuccess(false);
+            stepLog.setErrorMessage(e.getMessage());
+            stepLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
+            stepLogs.add(stepLog);
+
+            // 记录整体失败日志
+            QueryLog queryLog = new QueryLog();
+            queryLog.setIntentJson(objectMapper.writeValueAsString(steps));
+            queryLog.setExecutionSuccess(false);
+            queryLog.setErrorMessage("步骤 " + step.getId() + " 执行失败: " + e.getMessage());
+            Long queryLogId = queryLogService.logQuery(queryLog);
+
+            // 关联步骤日志到query_log
+            stepLogs.forEach(log -> log.setQueryLogId(queryLogId));
+            queryStepLogService.logSteps(stepLogs);
+
+            return QueryResponse.error("SQL执行失败: " + e.getMessage());
+        }
+
+        stepLogs.add(stepLog);
+    }
+
+    // 所有步骤执行成功，记录整体日志
+    QueryLog queryLog = new QueryLog();
+    queryLog.setUserId(request.getUserId());
+    queryLog.setConversationId(conversationId);
+    queryLog.setQuestion(question);
+    queryLog.setIntentJson(objectMapper.writeValueAsString(steps));
+    queryLog.setExecutionSuccess(true);
+    queryLog.setExecutionTime(System.currentTimeMillis() - startTime);
+    Long queryLogId = queryLogService.logQuery(queryLog);
+
+    // 关联所有步骤日志到query_log
+    stepLogs.forEach(log -> log.setQueryLogId(queryLogId));
+    queryStepLogService.logSteps(stepLogs);
+
+    // 返回最后一步的结果
+    SqlStep lastStep = steps.get(steps.size() - 1);
+    return QueryResponse.success(stepResults.get(lastStep.getId()));
+}
+```
+
+这样可以：
+- query_log 记录整个执行计划的总体信息
+- query_step_log 记录每个步骤的详细执行情况
+- 通过 query_log_id 关联两张表
+- 支持批量插入提高性能
+- 失败时也能记录已执行步骤的情况
 
 ## 4. 配置参数说明
 
-### 4.1 Schema检索配置
+### 4.1 三路径查询配置总览
 
-| 参数名 | 默认值 | 说明 | 影响范围 |
-|--------|--------|------|----------|
-| `schema.search.top-k` | 10 | Schema向量检索返回的最大结果数 | 路径2 |
-| `schema.search.similarity-threshold` | 0.5 | 相似度过滤阈值（0-1） | 路径2 |
-| `schema.search.bfs-retry-top-k` | 20 | 高召回模式的TopK值 | 路径3 |
+| 路径 | 配置参数 | 默认值 | 说明 |
+|------|---------|--------|------|
+| 路径1 | `MAX_TEMPLATE_CANDIDATES` | 5 | RAG模板检索返回的最大候选数 |
+| 路径1 | `template.search.similarity-threshold` | 0.6 | 模板相似度过滤阈值（0-1） |
+| 路径2 | `schema.search.similarity-threshold` | 0.5 | Schema检索相似度过滤阈值（0-1） |
+| 路径2 | `maxDepth` | 2 | BFS扩展的最大深度 |
+| 路径3 | `maxDepth` | 2 | BFS扩展的最大深度（无相似度过滤） |
 
-**配置示例（application.properties）**
-```properties
-schema.search.top-k=10
-schema.search.similarity-threshold=0.5
-schema.search.bfs-retry-top-k=20
-```
+### 4.2 路径1：RAG模板匹配配置
 
-**调优建议**：
-- `top-k` 过小：可能遗漏相关表
-- `top-k` 过大：增加噪音和计算开销
-- `similarity-threshold` 过高：召回率低
-- `similarity-threshold` 过低：准确率低
-
-### 4.2 模板检索配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `MAX_TEMPLATE_CANDIDATES` | 5 | 模板向量检索返回的最大结果数 |
-
-**代码中定义**：
+**模板检索配置**
 ```java
 private static final int MAX_TEMPLATE_CANDIDATES = 5;
 ```
 
-### 4.3 BFS扩展配置
-
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
-| `maxDepth` | 2 | BFS扩展的最大深度 |
-
-**代码中定义**：
-```java
-Set<Long> allModelIds = expandByBFS(seedModelIds, 2);
+**相似度过滤配置（application.properties）**
+```properties
+template.search.similarity-threshold=0.6
 ```
 
-**深度影响**：
-- 深度1：只包含直接关联的表
-- 深度2：包含二度关联的表
-- 深度3+：可能引入过多无关表
+**参数说明**：
+- `MAX_TEMPLATE_CANDIDATES`：模板向量检索返回的最大候选数
+  - 默认值：5
+  - 控制从向量库中检索的模板候选数量
+  - 较大值：提高找到匹配模板的概率，但增加LLM处理时间
 
-### 4.4 结果截断配置
+- `template.search.similarity-threshold`：模板相似度过滤阈值（0-1）
+  - 默认值：0.6（比Schema检索稍高，因为模板匹配要求更精确）
+  - 较高值（0.7-0.9）：只保留高度相似的模板，精确但可能无匹配
+  - 较低值（0.5-0.6）：保留更多候选模板，召回率高但可能不够精确
 
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
+**工作流程**：
+1. 向量化用户问题
+2. 在模板向量库中检索TopK=5的相似模板
+3. 相似度过滤（threshold=0.6），保留高相似度的模板
+4. LLM填充模板参数生成执行计划
+5. 解析为SqlStep列表并执行
+
+### 4.3 路径2：Schema RAG + BFS扩展配置
+
+**Schema检索配置（application.properties）**
+```properties
+schema.search.similarity-threshold=0.5
+```
+
+**参数说明**：
+- `schema.search.similarity-threshold`：相似度过滤阈值（0-1）
+  - 默认值：0.5
+  - 较高值（0.7-0.9）：高精确度，低召回率，只保留高度相关的表
+  - 较低值（0.3-0.5）：高召回率，低精确度，保留更多可能相关的表
+  - 向量检索返回所有结果，然后按此阈值过滤
+
+**BFS扩展配置**
+```java
+Set<Long> allModelIds = expandByBFS(seedModelIds, 2);  // maxDepth = 2
+```
+
+- `maxDepth`：BFS扩展的最大深度
+  - 默认值：2
+  - 深度1：只包含直接关联的表
+  - 深度2：包含二度关联的表（推荐）
+  - 深度3+：可能引入过多无关表
+
+**工作流程**：
+1. 向量化用户问题
+2. Schema向量检索获取所有相关表
+3. 相似度过滤（threshold=0.5），保留高相关度的表
+4. BFS扩展2层获取关联表
+5. LLM基于扩展后的表生成执行计划
+
+### 4.4 路径3：高召回BFS重试配置
+
+**配置说明**：
+- 路径3不使用相似度过滤阈值
+- 不限制检索结果数量
+- 保留所有向量检索返回的表，最大化召回率
+
+**BFS扩展配置**
+```java
+Set<Long> allModelIds = expandByBFS(seedModelIds, 2);  // maxDepth = 2
+```
+
+**触发条件**：
+- 用户对路径1或路径2的结果标记为"不满意"
+- 系统自动使用高召回模式重试
+
+**工作流程**：
+1. 向量化用户问题
+2. Schema向量检索获取所有相关表
+3. **不进行相似度过滤**（与路径2的关键区别）
+4. BFS扩展2层获取关联表
+5. LLM基于更大范围的表生成执行计划
+
+**与路径2的区别**：
+- 路径2：使用相似度阈值过滤，精确但可能遗漏
+- 路径3：不过滤，全量保留，召回率最高
+
+### 4.5 配置调优建议
+
+**路径选择策略**：
+- 路径1优先：快速、准确，适合常见查询模式
+- 路径2降级：灵活、通用，适合新颖查询
+- 路径3兜底：高召回、全面，适合复杂查询
+
+**参数调优原则**：
+1. **模板检索（路径1）**
+   - 增加`MAX_TEMPLATE_CANDIDATES`可提高模板匹配率
+   - 但会增加LLM处理时间和成本
+
+2. **Schema检索（路径2）**
+   - `similarity-threshold`过高（0.7-0.9）：精确但可能遗漏关键表
+   - `similarity-threshold`过低（0.3-0.5）：召回率高但引入噪音
+   - 建议根据实际数据分布和查询效果调整
+
+3. **高召回重试（路径3）**
+   - 不使用相似度过滤，保留所有检索结果
+   - 会显著增加LLM上下文和Token消耗
+   - 适合作为最后的兜底方案
+
+4. **BFS扩展深度**
+   - 深度2适合大多数场景
+   - 复杂业务可考虑深度3，但需评估性能影响
+
+**监控指标**：
+- 各路径的使用频率和成功率
+- 平均查询耗时
+- LLM Token消耗
+- 用户满意度反馈
 | `prevResultMaxRows` | 100 | 传递给下一步的最大结果行数 |
 
 **代码中定义**：
@@ -777,21 +1114,16 @@ List<Map<String, Object>> truncated = prevResult.size() > 100
 ```
 TextToSQLService
 ├── AIService (LLM调用)
-├── SemanticContextService (语义上下文生成)
+├── VectorSearchService (统一向量检索服务)
 ├── QueryExecutorService (SQL执行)
 ├── ConversationService (会话管理)
 ├── MessageService (消息管理)
-├── IntentAnalysisService (意图分析)
-├── QueryTemplateService (模板管理)
-├── TemplateParameterService (模板参数)
 ├── QueryLogService (查询日志)
-├── SchemaVectorStoreService (Schema向量存储)
-├── EmbeddingService (文本向量化)
-├── TemplateVectorSearchService (模板向量检索)
+├── QueryStepLogService (步骤日志)
 ├── ModelService (表模型管理)
 ├── RelationshipService (表关系管理)
 ├── ColumnDefinitionService (字段定义管理)
-└── IntentFewShotService (Few-Shot示例)
+└── DatabaseService (数据库管理)
 ```
 
 ### 5.2 核心服务职责
@@ -801,14 +1133,18 @@ TextToSQLService
 - 提取 SQL 代码块
 - 处理 LLM 响应
 
-**SchemaVectorStoreService**
-- Schema 向量存储和检索
+**VectorSearchService（统一向量检索服务）**
+- 模板向量检索（路径1）
+  - 检索相似模板
+  - 相似度过滤（threshold=0.6）
+  - 返回模板及相似度分数
+- Schema向量检索（路径2/3）
+  - 检索相关表
+  - 路径2：相似度过滤（threshold=0.5）
+  - 路径3：不过滤，全量返回
 - 问答对向量索引
-- 相似度计算
-
-**TemplateVectorSearchService**
-- 模板向量检索
-- 返回相似模板及相似度分数
+  - 用户满意时存储问答对
+  - 用于后续RAG检索
 
 **QueryExecutorService**
 - 执行 SQL 查询
@@ -820,8 +1156,12 @@ TextToSQLService
 - 支持 BFS 扩展
 
 **QueryLogService**
-- 记录查询日志
+- 记录整体查询日志（intent_json）
 - 获取历史示例
+
+**QueryStepLogService**
+- 记录步骤级别日志
+- 追踪每个步骤的执行情况
 - 支持用户反馈
 
 ### 5.3 数据流转图

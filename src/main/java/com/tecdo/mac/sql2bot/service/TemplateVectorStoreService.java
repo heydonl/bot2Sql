@@ -34,8 +34,8 @@ public class TemplateVectorStoreService {
     private static final String USER_TEMPLATE_INDEX_KEY = "user_template_index";
 
     // 模板类型常量
-    private static final int TYPE_USER_TEMPLATE = 1;
-    private static final int TYPE_SYSTEM_TEMPLATE = 2;
+    private static final int TYPE_USER_TEMPLATE = 1;  // 用户模板
+    private static final int TYPE_INTENT_FEW_SHOT = 2;  // 意图Few-shot示例
 
     /**
      * 为SQL模板创建向量索引
@@ -59,7 +59,7 @@ public class TemplateVectorStoreService {
             // 存储元数据
             TemplateMeta meta = new TemplateMeta();
             meta.setTemplateId(template.getId());
-            meta.setType(TYPE_SYSTEM_TEMPLATE);  // 2=system_template
+            meta.setType(TYPE_INTENT_FEW_SHOT);  // 2=intent_few_shot
             meta.setSkeleton(template.getSkeleton());
             meta.setSqlTemplate(template.getSqlTemplate());
             meta.setIntent(template.getIntent());
@@ -406,7 +406,7 @@ public class TemplateVectorStoreService {
     @Data
     public static class TemplateMeta {
         private Long templateId;
-        private Integer type;  // 1=user_template, 2=system_template
+        private Integer type;  // 1=user_template, 2=intent_few_shot
         private Long datasourceId;
         private String skeleton;
         private String sqlTemplate;

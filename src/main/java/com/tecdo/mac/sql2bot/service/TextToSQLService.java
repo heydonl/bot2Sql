@@ -128,7 +128,7 @@ public class TextToSQLService {
                     null, "bfs", 0.0, startTime);
             }
 
-            // 6. 路径1：RAG 模板检索（高准确性）- 支持用户模板和系统模板
+            // 6. 路径1：RAG 模板检索（高准确性）- 支持用户模板和意图Few-shot
             QueryTemplate matchedTemplate = null;
             UserQueryTemplate matchedUserTemplate = null;
             double templateSimilarity = 0.0;
@@ -155,7 +155,7 @@ public class TextToSQLService {
                 log.error("用户模板检索失败", e);
             }
 
-            // 如果用户模板未匹配，再搜索系统模板
+            // 如果用户模板未匹配，再搜索意图Few-shot
             if (matchedUserTemplate == null) {
                 try {
                     List<TemplateVectorSearchService.TemplateSearchResult> templateResults =
@@ -168,7 +168,7 @@ public class TextToSQLService {
                             QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
                             if (candidate != null) {
                                 matchedTemplate = candidate;
-                                log.info("系统模板匹配成功: templateId={}, similarity={}",
+                                log.info("意图Few-shot匹配成功: templateId={}, similarity={}",
                                         matchedTemplate.getId(), templateSimilarity);
                             }
                         } else {
@@ -179,7 +179,7 @@ public class TextToSQLService {
                         log.info("未找到符合条件的SQL模板，降级到路径2");
                     }
                 } catch (Exception e) {
-                    log.error("系统模板检索失败，降级到路径2", e);
+                    log.error("意图Few-shot检索失败，降级到路径2", e);
                 }
             }
 
@@ -199,8 +199,7 @@ public class TextToSQLService {
                 }
             }
 
-            // 处理系统模板匹配
-            // 处理系统模板匹配
+            // 处理意图Few-shot匹配
             if (matchedTemplate != null) {
                 try {
                     // 路径1：使用 LLM 基于模板和示例生成参数填充的执行计划
@@ -215,7 +214,7 @@ public class TextToSQLService {
                         queryTemplateService.incrementUsageCount(matchedTemplate.getId());
                         log.info("路径1 参数填充成功: templateId={}, steps={}", matchedTemplate.getId(), steps.size());
                         return executePlan(request.getQuestion(), steps, conversationId, request,
-                            matchedTemplate.getId(), "system_template", templateSimilarity, startTime);
+                            matchedTemplate.getId(), "intent_few_shot", templateSimilarity, startTime);
                     }
                 } catch (Exception e) {
                     log.error("路径1 处理失败，降级到路径2", e);
@@ -256,8 +255,8 @@ public class TextToSQLService {
 
         queryLogService.updateSatisfied(queryLogId, satisfied);
 
-        // 来自系统模板的查询不沉淀为用户模板
-        if ("system_template".equals(queryLog.getSourceType())) {
+        // 来自意图Few-shot的查询不沉淀为用户模板
+        if ("intent_few_shot".equals(queryLog.getSourceType())) {
             return;
         }
 
@@ -524,7 +523,7 @@ public class TextToSQLService {
             return QueryResponse.error(err);
         }
 
-        String explanation = "system_template".equals(sourceType) ? "通过系统模板匹配生成查询" :
+        String explanation = "intent_few_shot".equals(sourceType) ? "通过意图Few-shot匹配生成查询" :
                              "user_template".equals(sourceType) ? "通过用户模板匹配生成查询" :
                              "通过BFS表发现生成查询";
         List<Map<String, Object>> prevResult = null;
