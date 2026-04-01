@@ -30,6 +30,12 @@ public class MigrateDatabaseStructure implements CommandLineRunner {
             // 3. 从现有数据迁移：为每个 model 创建对应的 database 记录
             migrateExistingData();
 
+            // 4. 为 query_log 表添加用户反馈字段
+            addUserFeedbackColumnsToQueryLog();
+
+            // 5. 创建 user_query_template 表
+            createUserQueryTemplateTable();
+
             log.info("Database structure migration completed successfully");
         } catch (Exception e) {
             log.error("Database structure migration failed", e);
@@ -189,5 +195,78 @@ public class MigrateDatabaseStructure implements CommandLineRunner {
 
         log.info("Created database record: datasourceId={}, databaseName={}, id={}", datasourceId, databaseName, id);
         return id;
+    }
+
+    private void addUserFeedbackColumnsToQueryLog() {
+        String[] columns = {"satisfied", "retry_from_id", "source_type", "source_template_id"};
+        String[] addSqls = {
+            "ALTER TABLE query_log ADD COLUMN satisfied BOOLEAN COMMENT '用户是否满意'",
+            "ALTER TABLE query_log ADD COLUMN retry_from_id BIGINT COMMENT '重试来源的query_log ID'",
+            "ALTER TABLE query_log ADD COLUMN source_type VARCHAR(20) COMMENT '来源类型'",
+            "ALTER TABLE query_log ADD COLUMN source_template_id BIGINT COMMENT '来源模板ID'"
+        };
+
+        for (int i = 0; i < columns.length; i++) {
+            String col = columns[i];
+            try {
+                Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'query_log' AND column_name = ?",
+                    Integer.class, col
+                );
+                if (count != null && count > 0) {
+                    log.info("Column '{}' already exists in query_log, skipping", col);
+                } else {
+                    jdbcTemplate.execute(addSqls[i]);
+                    log.info("Added column '{}' to query_log", col);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to add column '{}' to query_log: {}", col, e.getMessage());
+            }
+        }
+
+        // 添加索引
+        try {
+            jdbcTemplate.execute("ALTER TABLE query_log ADD INDEX idx_retry_from (retry_from_id)");
+        } catch (Exception e) {
+            log.debug("Index idx_retry_from may already exist: {}", e.getMessage());
+        }
+        try {
+            jdbcTemplate.execute("ALTER TABLE query_log ADD INDEX idx_source (source_type, source_template_id)");
+        } catch (Exception e) {
+            log.debug("Index idx_source may already exist: {}", e.getMessage());
+        }
+    }
+
+    private void createUserQueryTemplateTable() {
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'user_query_template'",
+                Integer.class
+            );
+            if (count != null && count > 0) {
+                log.info("Table 'user_query_template' already exists, skipping creation");
+                return;
+            }
+
+            jdbcTemplate.execute("""
+                CREATE TABLE user_query_template (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                    question VARCHAR(500) NOT NULL COMMENT '用户问题',
+                    generated_sql TEXT NOT NULL COMMENT '生成的SQL',
+                    datasource_id BIGINT COMMENT '数据源ID',
+                    total_score INT DEFAULT 0 COMMENT '总评分（满意次数）',
+                    rating_count INT DEFAULT 0 COMMENT '评分次数',
+                    avg_score DECIMAL(3,2) DEFAULT 0.00 COMMENT '平均分',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                    UNIQUE KEY uk_question_sql (question(255), generated_sql(255)),
+                    INDEX idx_avg_score (avg_score DESC),
+                    INDEX idx_datasource (datasource_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户查询模板'
+                """);
+            log.info("Created table 'user_query_template'");
+        } catch (Exception e) {
+            log.warn("Failed to create user_query_template table: {}", e.getMessage());
+        }
     }
 }
