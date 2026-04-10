@@ -7,8 +7,6 @@ import com.tecdo.mac.sql2bot.domain.QueryLog;
 import com.tecdo.mac.sql2bot.domain.QueryTemplate;
 import com.tecdo.mac.sql2bot.dto.QueryRequest;
 import com.tecdo.mac.sql2bot.dto.QueryResponse;
-import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisRequest;
-import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,7 +28,6 @@ public class EnhancedTextToSQLService {
     private final QueryExecutorService queryExecutorService;
     private final ConversationService conversationService;
     private final MessageService messageService;
-    private final IntentAnalysisService intentAnalysisService;
     private final QueryTemplateService queryTemplateService;
     private final TemplateParameterService templateParameterService;
     private final QueryLogService queryLogService;
@@ -65,7 +62,7 @@ public class EnhancedTextToSQLService {
             log.info("开始RAG模板检索: question={}", request.getQuestion());
 
             List<TemplateVectorStoreService.TemplateSearchResult> templateResults =
-                templateVectorStoreService.searchSimilarTemplates(
+                templateVectorStoreService.searchSystemTemplates(
                     request.getQuestion(),
                     null,
                     5 // 检索前5个最相似的模板
@@ -93,13 +90,8 @@ public class EnhancedTextToSQLService {
             if (matchedTemplate != null) {
                 // 5a. 使用匹配的模板生成SQL
                 try {
-                    // 进行意图分析以获取参数值
-                    IntentAnalysisRequest intentRequest = new IntentAnalysisRequest();
-                    intentRequest.setQuestion(request.getQuestion());
-                    IntentAnalysisResponse intentResponse = intentAnalysisService.analyzeIntent(intentRequest);
-
-                    // 使用LLM生成模板参数值
-                    sql = templateParameterService.fillTemplate(matchedTemplate, intentResponse);
+                    // 使用LLM基于模板生成SQL
+                    sql = templateParameterService.fillTemplate(matchedTemplate, null);
                     templateId = matchedTemplate.getId();
                     isFromTemplate = true;
                     explanation = "基于相似模板生成查询（相似度: " + String.format("%.2f", templateSimilarity) + "）";

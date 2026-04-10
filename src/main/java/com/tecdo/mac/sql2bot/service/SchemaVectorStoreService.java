@@ -33,9 +33,7 @@ import java.util.stream.Collectors;
 public class SchemaVectorStoreService {
 
     private static final String INDEX_NAME = "idx:schema";
-    private static final String INDEX_QUESTION_ANSWER_NAME = "idx:question-answer:template";
     private static final String KEY_PREFIX = "schema:";
-    private static final String KEY_QUESTION_ANSWER_PREFIX = "question-answer:template:";
     private static final String VECTOR_FIELD = "vector";
     private static final String TABLE_NAME_FIELD = "table_name";
     private static final String DATASOURCE_ID_FIELD = "datasource_id";
@@ -59,9 +57,9 @@ public class SchemaVectorStoreService {
      */
     @PostConstruct
     public void initIndex() {
+        // 初始化 schema 索引
         try {
             Map<String, Object> info = jedisPooled.ftInfo(INDEX_NAME);
-            // 检查现有索引的向量维度是否匹配
             long existingDim = extractDimFromInfo(info);
             if (existingDim > 0 && existingDim != dimension) {
                 log.warn("RedisStack 索引 {} 维度不匹配（现有: {}, 配置: {}），删除重建", INDEX_NAME, existingDim, dimension);
@@ -73,22 +71,6 @@ public class SchemaVectorStoreService {
         } catch (Exception e) {
             log.info("RedisStack 索引 {} 不存在，开始创建", INDEX_NAME);
             createIndex();
-        }
-
-        // 初始化问答模板索引
-        try {
-            Map<String, Object> info = jedisPooled.ftInfo(INDEX_QUESTION_ANSWER_NAME);
-            long existingDim = extractDimFromInfo(info);
-            if (existingDim > 0 && existingDim != dimension) {
-                log.warn("RedisStack 索引 {} 维度不匹配（现有: {}, 配置: {}），删除重建", INDEX_QUESTION_ANSWER_NAME, existingDim, dimension);
-                jedisPooled.ftDropIndex(INDEX_QUESTION_ANSWER_NAME);
-                createQuestionAnswerIndex();
-            } else {
-                log.info("RedisStack 索引 {} 已存在，维度: {}", INDEX_QUESTION_ANSWER_NAME, existingDim > 0 ? existingDim : "unknown");
-            }
-        } catch (Exception e) {
-            log.info("RedisStack 索引 {} 不存在，开始创建", INDEX_QUESTION_ANSWER_NAME);
-            createQuestionAnswerIndex();
         }
     }
 
@@ -143,32 +125,6 @@ public class SchemaVectorStoreService {
         }
     }
 
-    private void createQuestionAnswerIndex() {
-        try {
-            Map<String, Object> vectorAttrs = new HashMap<>();
-            vectorAttrs.put("TYPE", "FLOAT32");
-            vectorAttrs.put("DIM", dimension);
-            vectorAttrs.put("DISTANCE_METRIC", "COSINE");
-
-            jedisPooled.ftCreate(INDEX_QUESTION_ANSWER_NAME,
-                    FTCreateParams.createParams()
-                            .on(IndexDataType.HASH)
-                            .addPrefix(KEY_QUESTION_ANSWER_PREFIX),
-                    TextField.of(TABLE_NAME_FIELD),
-                    NumericField.of(DATASOURCE_ID_FIELD),
-                    TextField.of(META_FIELD).noIndex(),
-                    VectorField.builder()
-                            .fieldName(VECTOR_FIELD)
-                            .algorithm(VectorField.VectorAlgorithm.HNSW)
-                            .attributes(vectorAttrs)
-                            .build()
-            );
-            log.info("RedisStack 索引 {} 创建成功，向量维度: {}", INDEX_QUESTION_ANSWER_NAME, dimension);
-        } catch (Exception ex) {
-            log.error("创建 RedisStack 索引 {} 失败: {}", INDEX_QUESTION_ANSWER_NAME, ex.getMessage(), ex);
-        }
-    }
-
     /**
      * 索引表模型
      */
@@ -202,33 +158,6 @@ public class SchemaVectorStoreService {
         } catch (Exception e) {
             log.error("索引表模型失败: modelId={}, error={}", model.getId(), e.getMessage(), e);
             throw new RuntimeException("索引表模型失败", e);
-        }
-    }
-
-    /**
-     * 索引问答对（用户满意时调用）
-     */
-    public void indexQuestionAnswer(Long queryLogId, String question, String answer) {
-        try {
-            // 生成 embedding（使用问题）
-            float[] embedding = embeddingService.generateEmbedding(question);
-
-            // 存储到 RedisStack
-            String key = KEY_QUESTION_ANSWER_PREFIX + queryLogId;
-            byte[] keyBytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-            Map<byte[], byte[]> hash = new HashMap<>();
-            hash.put("question".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    question.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            hash.put("answer".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    answer.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            hash.put(VECTOR_FIELD.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    toFloat32Bytes(embedding));
-
-            jedisPooled.hset(keyBytes, hash);
-            log.info("已索引问答对: queryLogId={}", queryLogId);
-        } catch (Exception e) {
-            log.error("索引问答对失败: queryLogId={}, error={}", queryLogId, e.getMessage(), e);
         }
     }
 

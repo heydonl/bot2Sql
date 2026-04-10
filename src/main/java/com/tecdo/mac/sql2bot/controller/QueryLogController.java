@@ -2,11 +2,8 @@ package com.tecdo.mac.sql2bot.controller;
 
 import com.tecdo.mac.sql2bot.common.Result;
 import com.tecdo.mac.sql2bot.domain.QueryLog;
-import com.tecdo.mac.sql2bot.dto.BatchLabelRequest;
-import com.tecdo.mac.sql2bot.dto.LabelFewShotRequest;
 import com.tecdo.mac.sql2bot.dto.QueryLogFilter;
 import com.tecdo.mac.sql2bot.dto.QueryLogStats;
-import com.tecdo.mac.sql2bot.service.IntentFewShotService;
 import com.tecdo.mac.sql2bot.service.QueryLogService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +22,6 @@ import java.util.Map;
 public class QueryLogController {
 
     private final QueryLogService queryLogService;
-    private final IntentFewShotService fewShotService;
 
     /**
      * 查询日志列表
@@ -54,39 +50,6 @@ public class QueryLogController {
             return Result.success(queryLog);
         } catch (Exception e) {
             log.error("获取查询日志详情失败: id={}", id, e);
-            return Result.error(e.getMessage());
-        }
-    }
-
-    /**
-     * 标注为 few-shot 示例
-     */
-    @PostMapping("/{id}/label-as-few-shot")
-    public Result<Long> labelAsFewShot(@PathVariable Long id, @RequestBody LabelFewShotRequest request) {
-        try {
-            Long fewShotId = fewShotService.labelFromQueryLog(id, request);
-            log.info("标注 few-shot 成功: queryLogId={}, fewShotId={}", id, fewShotId);
-            return Result.success(fewShotId);
-        } catch (IllegalArgumentException e) {
-            log.warn("标注 few-shot 参数错误: queryLogId={}, error={}", id, e.getMessage());
-            return Result.error(400, e.getMessage());
-        } catch (Exception e) {
-            log.error("标注 few-shot 失败: queryLogId={}", id, e);
-            return Result.error(e.getMessage());
-        }
-    }
-
-    /**
-     * 批量标注 few-shot
-     */
-    @PostMapping("/batch-label")
-    public Result<List<Long>> batchLabel(@RequestBody BatchLabelRequest request) {
-        try {
-            List<Long> fewShotIds = fewShotService.batchLabel(request);
-            log.info("批量标注 few-shot 成功: count={}", fewShotIds.size());
-            return Result.success(fewShotIds);
-        } catch (Exception e) {
-            log.error("批量标注 few-shot 失败", e);
             return Result.error(e.getMessage());
         }
     }

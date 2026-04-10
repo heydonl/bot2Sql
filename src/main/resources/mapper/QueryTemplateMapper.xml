@@ -5,17 +5,10 @@
 
     <resultMap id="BaseResultMap" type="com.tecdo.mac.sql2bot.domain.QueryTemplate">
         <id column="id" property="id"/>
-        <result column="skeleton" property="skeleton"/>
-        <result column="sql_template" property="sqlTemplate"/>
-        <result column="entity" property="entity"/>
-        <result column="intent" property="intent"/>
-        <result column="supported_dimensions" property="supportedDimensions"/>
-        <result column="supported_metrics" property="supportedMetrics"/>
-        <result column="parameters" property="parameters"/>
-        <result column="example_question" property="exampleQuestion"/>
-        <result column="example_intent_json" property="exampleIntentJson"/>
+        <result column="question" property="question"/>
+        <result column="generated_sql" property="generatedSql"/>
+        <result column="datasource_id" property="datasourceId"/>
         <result column="score" property="score"/>
-        <result column="rating_count" property="ratingCount"/>
         <result column="usage_count" property="usageCount"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
@@ -24,15 +17,9 @@
     <insert id="insert" parameterType="com.tecdo.mac.sql2bot.domain.QueryTemplate"
             useGeneratedKeys="true" keyProperty="id">
         INSERT INTO query_template (
-            skeleton, sql_template, entity, intent,
-            supported_dimensions, supported_metrics, parameters,
-            example_question, example_intent_json,
-            score, rating_count, usage_count
+            question, generated_sql, datasource_id, score, usage_count
         ) VALUES (
-            #{skeleton}, #{sqlTemplate}, #{entity}, #{intent},
-            #{supportedDimensions}, #{supportedMetrics}, #{parameters},
-            #{exampleQuestion}, #{exampleIntentJson},
-            #{score}, #{ratingCount}, #{usageCount}
+            #{question}, #{generatedSql}, #{datasourceId}, #{score}, #{usageCount}
         )
     </insert>
 
@@ -44,18 +31,24 @@
         SELECT * FROM query_template ORDER BY score DESC, usage_count DESC
     </select>
 
-    <select id="selectBySkeleton" resultMap="BaseResultMap">
-        SELECT * FROM query_template WHERE skeleton = #{skeleton}
+    <select id="selectTopRated" resultMap="BaseResultMap">
+        SELECT * FROM query_template
+        WHERE question IS NOT NULL AND generated_sql IS NOT NULL
+        ORDER BY score DESC, usage_count DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findByQuestionAndSql" resultMap="BaseResultMap">
+        SELECT * FROM query_template
+        WHERE question = #{question} AND generated_sql = #{generatedSql}
+        LIMIT 1
     </select>
 
     <select id="selectList" resultMap="BaseResultMap">
         SELECT * FROM query_template
         <where>
-            <if test="intent != null and intent != ''">
-                AND intent = #{intent}
-            </if>
-            <if test="entity != null and entity != ''">
-                AND entity = #{entity}
+            <if test="datasourceId != null">
+                AND datasource_id = #{datasourceId}
             </if>
         </where>
         ORDER BY score DESC, usage_count DESC
@@ -65,11 +58,8 @@
     <select id="count" resultType="int">
         SELECT COUNT(*) FROM query_template
         <where>
-            <if test="intent != null and intent != ''">
-                AND intent = #{intent}
-            </if>
-            <if test="entity != null and entity != ''">
-                AND entity = #{entity}
+            <if test="datasourceId != null">
+                AND datasource_id = #{datasourceId}
             </if>
         </where>
     </select>
@@ -77,24 +67,19 @@
     <update id="updateById" parameterType="com.tecdo.mac.sql2bot.domain.QueryTemplate">
         UPDATE query_template
         <set>
-            <if test="skeleton != null">skeleton = #{skeleton},</if>
-            <if test="sqlTemplate != null">sql_template = #{sqlTemplate},</if>
-            <if test="entity != null">entity = #{entity},</if>
-            <if test="intent != null">intent = #{intent},</if>
-            <if test="supportedDimensions != null">supported_dimensions = #{supportedDimensions},</if>
-            <if test="supportedMetrics != null">supported_metrics = #{supportedMetrics},</if>
-            <if test="parameters != null">parameters = #{parameters},</if>
-            <if test="exampleQuestion != null">example_question = #{exampleQuestion},</if>
-            <if test="exampleIntentJson != null">example_intent_json = #{exampleIntentJson},</if>
+            <if test="question != null">question = #{question},</if>
+            <if test="generatedSql != null">generated_sql = #{generatedSql},</if>
+            <if test="datasourceId != null">datasource_id = #{datasourceId},</if>
+            <if test="score != null">score = #{score},</if>
+            <if test="usageCount != null">usage_count = #{usageCount},</if>
             updated_at = CURRENT_TIMESTAMP
         </set>
         WHERE id = #{id}
     </update>
 
-    <update id="updateRating">
+    <update id="updateScore">
         UPDATE query_template
-        SET score = (score * rating_count + #{newScore}) / (rating_count + 1),
-            rating_count = rating_count + 1
+        SET score = #{score}, usage_count = usage_count + 1
         WHERE id = #{id}
     </update>
 
@@ -112,8 +97,7 @@
         SELECT
             COUNT(*) as totalTemplates,
             AVG(score) as averageScore,
-            SUM(usage_count) as totalUsageCount,
-            SUM(rating_count) as totalRatingCount
+            SUM(usage_count) as totalUsageCount
         FROM query_template
     </select>
 

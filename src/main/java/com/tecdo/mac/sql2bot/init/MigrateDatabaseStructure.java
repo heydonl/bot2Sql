@@ -36,6 +36,15 @@ public class MigrateDatabaseStructure implements CommandLineRunner {
             // 5. 创建 user_query_template 表
             createUserQueryTemplateTable();
 
+            // 6. 为 query_log 表添加 error_message 字段
+            addErrorMessageToQueryLog();
+
+            // 7. 创建 query_step_log 表
+            createQueryStepLogTable();
+
+            // 8. 迁移 query_template 表结构
+            migrateQueryTemplateStructure();
+
             log.info("Database structure migration completed successfully");
         } catch (Exception e) {
             log.error("Database structure migration failed", e);
@@ -267,6 +276,254 @@ public class MigrateDatabaseStructure implements CommandLineRunner {
             log.info("Created table 'user_query_template'");
         } catch (Exception e) {
             log.warn("Failed to create user_query_template table: {}", e.getMessage());
+        }
+    }
+
+    private void addErrorMessageToQueryLog() {
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'query_log' AND column_name = 'error_message'",
+                Integer.class
+            );
+            if (count != null && count > 0) {
+                log.info("Column 'error_message' already exists in query_log, skipping");
+                return;
+            }
+
+            jdbcTemplate.execute("ALTER TABLE query_log ADD COLUMN error_message TEXT COMMENT 'SQL执行错误信息'");
+            log.info("Added column 'error_message' to query_log");
+        } catch (Exception e) {
+            log.warn("Failed to add column 'error_message' to query_log: {}", e.getMessage());
+        }
+    }
+
+    private void createQueryStepLogTable() {
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'query_step_log'",
+                Integer.class
+            );
+            if (count != null && count > 0) {
+                log.info("Table 'query_step_log' already exists, skipping creation");
+                return;
+            }
+
+            jdbcTemplate.execute("""
+                CREATE TABLE query_step_log (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                  query_log_id BIGINT NOT NULL COMMENT '关联的query_log主键',
+                  step_id VARCHAR(50) NOT NULL COMMENT '步骤ID（如step1、step2）',
+                  step_index INT NOT NULL COMMENT '步骤序号（从0开始）',
+                  sql_template TEXT COMMENT 'SQL模板',
+                  filled_sql TEXT COMMENT '填充参数后的完整SQL',
+                  datasource_id BIGINT COMMENT '数据源ID',
+                  execution_success BOOLEAN COMMENT '执行是否成功',
+                  result_count INT COMMENT '结果行数',
+                  execution_time BIGINT COMMENT '执行耗时（毫秒）',
+                  error_message TEXT COMMENT '错误信息',
+                  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                  INDEX idx_query_step_log_query_log_id (query_log_id),
+                  INDEX idx_query_step_log_step_id (step_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='查询步骤执行日志表'
+                """);
+            log.info("Created table 'query_step_log'");
+        } catch (Exception e) {
+            log.warn("Failed to create query_step_log table: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 迁移 query_template 表结构
+     * 1. 备份现有数据
+     * 2. 迁移 intent_few_shot 数据到 query_template
+     * 3. 删除旧字段，添加新字段
+     * 4. 数据迁移
+     * 5. 删除 intent_few_shot 表
+     */
+    private void migrateQueryTemplateStructure() {
+        try {
+            log.info("开始迁移 query_template 表结构");
+
+            // 步骤1：检查是否已经迁移过（通过检查 question 字段是否存在）
+            Integer questionColumnCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'query_template' AND column_name = 'question'",
+                Integer.class
+            );
+            if (questionColumnCount != null && questionColumnCount > 0) {
+                log.info("query_template 表已经迁移过，跳过");
+                return;
+            }
+
+            // 步骤2：备份现有数据
+            backupQueryTemplate();
+
+            // 步骤3：迁移 intent_few_shot 数据到 query_template
+            migrateIntentFewShotData();
+
+            // 步骤4：调整表结构
+            alterQueryTemplateStructure();
+
+            // 步骤5：数据迁移（将 sql_template 复制到 generated_sql）
+            migrateQueryTemplateData();
+
+            // 步骤6：删除临时字段
+            dropTemporaryColumns();
+
+            // 步骤7：删除 intent_few_shot 表
+            dropIntentFewShotTable();
+
+            log.info("query_template 表结构迁移完成");
+        } catch (Exception e) {
+            log.error("迁移 query_template 表结构失败", e);
+        }
+    }
+
+    private void backupQueryTemplate() {
+        try {
+            // 检查备份表是否已存在
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'query_template_backup'",
+                Integer.class
+            );
+            if (count != null && count > 0) {
+                log.info("备份表 query_template_backup 已存在，跳过备份");
+                return;
+            }
+
+            jdbcTemplate.execute("CREATE TABLE query_template_backup AS SELECT * FROM query_template");
+            log.info("已备份 query_template 表到 query_template_backup");
+        } catch (Exception e) {
+            log.warn("备份 query_template 表失败: {}", e.getMessage());
+        }
+    }
+
+    private void migrateIntentFewShotData() {
+        try {
+            // 检查 intent_few_shot 表是否存在
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'intent_few_shot'",
+                Integer.class
+            );
+            if (count == null || count == 0) {
+                log.info("intent_few_shot 表不存在，跳过数据迁移");
+                return;
+            }
+
+            // 迁移数据
+            jdbcTemplate.execute("""
+                INSERT INTO query_template (skeleton, sql_template, entity, intent, score, usage_count, created_at, updated_at)
+                SELECT
+                    COALESCE(skeleton, '') as skeleton,
+                    CONCAT('-- Intent: ', intent, '\\n-- Question: ', question, '\\n', intent_json) as sql_template,
+                    '' as entity,
+                    intent,
+                    1.0 as score,
+                    0 as usage_count,
+                    created_at,
+                    updated_at
+                FROM intent_few_shot
+                WHERE is_active = TRUE
+                """);
+            log.info("已迁移 intent_few_shot 数据到 query_template");
+        } catch (Exception e) {
+            log.warn("迁移 intent_few_shot 数据失败: {}", e.getMessage());
+        }
+    }
+
+    private void alterQueryTemplateStructure() {
+        try {
+            log.info("开始调整 query_template 表结构");
+
+            // 添加新字段
+            jdbcTemplate.execute("ALTER TABLE query_template ADD COLUMN question VARCHAR(500) NULL AFTER id");
+            log.info("已添加 question 字段");
+
+            jdbcTemplate.execute("ALTER TABLE query_template ADD COLUMN generated_sql TEXT NULL AFTER question");
+            log.info("已添加 generated_sql 字段");
+
+            jdbcTemplate.execute("ALTER TABLE query_template ADD COLUMN datasource_id BIGINT NULL AFTER generated_sql");
+            log.info("已添加 datasource_id 字段");
+
+        } catch (Exception e) {
+            log.warn("调整 query_template 表结构失败: {}", e.getMessage());
+        }
+    }
+
+    private void migrateQueryTemplateData() {
+        try {
+            // 将 example_question 复制到 question
+            jdbcTemplate.execute("""
+                UPDATE query_template
+                SET question = COALESCE(example_question, CONCAT('查询', id))
+                WHERE question IS NULL
+                """);
+            log.info("已迁移 example_question 到 question");
+
+            // 将 sql_template 复制到 generated_sql
+            jdbcTemplate.execute("""
+                UPDATE query_template
+                SET generated_sql = COALESCE(sql_template, '')
+                WHERE generated_sql IS NULL OR generated_sql = ''
+                """);
+            log.info("已迁移 sql_template 到 generated_sql");
+
+            // 设置 question 和 generated_sql 为 NOT NULL
+            jdbcTemplate.execute("ALTER TABLE query_template MODIFY COLUMN question VARCHAR(500) NOT NULL");
+            jdbcTemplate.execute("ALTER TABLE query_template MODIFY COLUMN generated_sql TEXT NOT NULL");
+            log.info("已设置 question 和 generated_sql 为 NOT NULL");
+
+        } catch (Exception e) {
+            log.warn("迁移 query_template 数据失败: {}", e.getMessage());
+        }
+    }
+
+    private void dropTemporaryColumns() {
+        try {
+            log.info("开始删除旧字段");
+
+            // 删除旧字段
+            String[] columnsToDelete = {
+                "skeleton", "sql_template", "entity", "intent",
+                "supported_dimensions", "supported_metrics", "parameters",
+                "example_question", "example_intent_json", "rating_count"
+            };
+
+            for (String column : columnsToDelete) {
+                try {
+                    jdbcTemplate.execute("ALTER TABLE query_template DROP COLUMN " + column);
+                    log.info("已删除字段: {}", column);
+                } catch (Exception e) {
+                    log.debug("删除字段 {} 失败（可能已不存在）: {}", column, e.getMessage());
+                }
+            }
+
+            // 添加唯一索引
+            try {
+                jdbcTemplate.execute("ALTER TABLE query_template ADD UNIQUE KEY uk_question_sql (question(255), generated_sql(255))");
+                log.info("已添加唯一索引 uk_question_sql");
+            } catch (Exception e) {
+                log.debug("添加唯一索引失败（可能已存在）: {}", e.getMessage());
+            }
+
+            // 添加 datasource_id 索引
+            try {
+                jdbcTemplate.execute("ALTER TABLE query_template ADD INDEX idx_datasource (datasource_id)");
+                log.info("已添加索引 idx_datasource");
+            } catch (Exception e) {
+                log.debug("添加索引失败（可能已存在）: {}", e.getMessage());
+            }
+
+        } catch (Exception e) {
+            log.warn("删除旧字段失败: {}", e.getMessage());
+        }
+    }
+
+    private void dropIntentFewShotTable() {
+        try {
+            jdbcTemplate.execute("DROP TABLE IF EXISTS intent_few_shot");
+            log.info("已删除 intent_few_shot 表");
+        } catch (Exception e) {
+            log.warn("删除 intent_few_shot 表失败: {}", e.getMessage());
         }
     }
 }

@@ -43,12 +43,12 @@ public class QueryLogService {
     }
 
     /**
-     * 标注为 few-shot 示例
+     * 标注为系统模板示例
      */
     @Transactional
     public void markAsLabeled(Long logId) {
         queryLogMapper.markAsLabeled(logId);
-        log.info("标注为 few-shot 示例成功: logId={}", logId);
+        log.info("标注为系统模板示例成功: logId={}", logId);
     }
 
     /**
@@ -125,5 +125,19 @@ public class QueryLogService {
     public QueryLog getBestRecentExample(Long datasourceId) {
         List<QueryLog> results = queryLogMapper.selectBestRecentExample(datasourceId, 1);
         return results.isEmpty() ? null : results.get(0);
+    }
+
+    /**
+     * 获取最近的失败案例（执行失败或用户不满意）
+     */
+    public List<QueryLog> getRecentFailedCases(int limit) {
+        return queryLogMapper.selectRecentFailedCases(limit);
+    }
+
+    /**
+     * 获取指定会话中的失败案例（执行失败或用户不满意）
+     */
+    public List<QueryLog> getFailedCasesByConversation(Long conversationId, int limit) {
+        return queryLogMapper.selectFailedCasesByConversation(conversationId, limit);
     }
 }

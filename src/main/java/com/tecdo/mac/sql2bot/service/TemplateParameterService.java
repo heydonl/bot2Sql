@@ -37,7 +37,7 @@ public class TemplateParameterService {
     public String fillTemplateWithLLMParameters(QueryTemplate template, String llmParameterResponse) {
         log.info("开始使用LLM参数填充模板: templateId={}", template.getId());
 
-        String sql = template.getSqlTemplate();
+        String sql = template.getGeneratedSql();
 
         try {
             // 从LLM响应中提取JSON参数
@@ -140,54 +140,21 @@ public class TemplateParameterService {
 
     /**
      * 填充模板
-     * 将意图分析结果中的参数值填充到 SQL 模板的占位符中
+     * 直接返回生成的SQL（新模板结构不再需要参数填充）
      *
      * @param template 查询模板
-     * @param intent 意图分析结果
-     * @return 填充后的 SQL
+     * @param intent 意图分析结果（已废弃，保留参数以兼容）
+     * @return 生成的 SQL
      */
     public String fillTemplate(QueryTemplate template, IntentAnalysisResponse intent) {
-        log.info("开始填充模板: templateId={}, skeleton={}", template.getId(), template.getSkeleton());
+        log.info("开始填充模板: templateId={}", template.getId());
 
-        String sql = template.getSqlTemplate();
+        // 新模板结构直接存储完整的 generatedSql，不需要参数填充
+        String sql = template.getGeneratedSql();
 
-        // 解析参数定义
-        List<TemplateParameter> parameters = parseParameters(template.getParameters());
-
-        if (parameters.isEmpty()) {
-            log.debug("模板无参数定义，直接返回 SQL");
-            return sql;
-        }
-
-        log.debug("解析到 {} 个参数", parameters.size());
-
-        // 遍历参数，提取值并替换占位符
-        for (TemplateParameter param : parameters) {
-            try {
-                // 从意图中提取参数值
-                Object value = extractValue(param, intent);
-
-                if (value == null) {
-                    if (Boolean.TRUE.equals(param.getRequired())) {
-                        log.warn("必需参数 {} 未找到值", param.getName());
-                    }
-                    // 使用默认值
-                    value = param.getDefaultValue();
-                }
-
-                if (value != null) {
-                    // 格式化参数值
-                    String formattedValue = formatValue(param, value);
-
-                    // 替换占位符
-                    String placeholder = "{{" + param.getName() + "}}";
-                    sql = sql.replace(placeholder, formattedValue);
-
-                    log.debug("参数 {} 填充完成: {}", param.getName(), formattedValue);
-                }
-            } catch (Exception e) {
-                log.error("填充参数 {} 时出错", param.getName(), e);
-            }
+        if (sql == null || sql.isEmpty()) {
+            log.warn("模板 SQL 为空: templateId={}", template.getId());
+            return "";
         }
 
         log.info("模板填充完成");

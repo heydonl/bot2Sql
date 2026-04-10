@@ -51,9 +51,6 @@ class TextToSQLServicePathTest {
     private MessageService messageService;
 
     @Mock
-    private IntentAnalysisService intentAnalysisService;
-
-    @Mock
     private QueryTemplateService queryTemplateService;
 
     @Mock
@@ -69,9 +66,6 @@ class TextToSQLServicePathTest {
     private EmbeddingService embeddingService;
 
     @Mock
-    private TemplateVectorSearchService templateVectorSearchService;
-
-    @Mock
     private TemplateVectorStoreService templateVectorStoreService;
 
     @Mock
@@ -85,9 +79,6 @@ class TextToSQLServicePathTest {
 
     @Mock
     private ColumnDefinitionService columnDefinitionService;
-
-    @Mock
-    private IntentFewShotService intentFewShotService;
 
     @Mock
     private DataSourceService dataSourceService;
@@ -137,8 +128,8 @@ class TextToSQLServicePathTest {
         // 初始化测试模板
         testTemplate = new QueryTemplate();
         testTemplate.setId(1L);
-        testTemplate.setSqlTemplate("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
-        testTemplate.setParameters("{\"advertiserId\":\"广告主ID\"}");
+        testTemplate.setQuestion("查询广告主的数据");
+        testTemplate.setGeneratedSql("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
 
         // 初始化测试查询结果
         testQueryResult = new ArrayList<>();
@@ -155,18 +146,18 @@ class TextToSQLServicePathTest {
     @Test
     void testPath1_RAGTemplateMatchSuccess() throws Exception {
         // 准备模板搜索结果
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(1L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.85);
+        searchResult.setSimilarity(0.85);
 
-        List<TemplateVectorSearchService.TemplateSearchResult> templateResults = List.of(searchResult);
+        List<TemplateVectorStoreService.TemplateSearchResult> templateResults = List.of(searchResult);
 
         // Mock 依赖调用
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(templateResults);
         when(queryTemplateService.getById(1L)).thenReturn(testTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))
@@ -188,7 +179,7 @@ class TextToSQLServicePathTest {
         // 验证结果
         assertNotNull(response);
         assertTrue(response.getSuccess());
-        assertEquals("通过意图Few-shot匹配生成查询", response.getExplanation());
+        assertEquals("通过系统模板匹配生成查询", response.getExplanation());
         assertTrue(response.isFromTemplate());
         assertEquals(1L, response.getTemplateId());
         assertEquals(0.85, response.getTemplateSimilarity(), 0.01);
@@ -196,7 +187,7 @@ class TextToSQLServicePathTest {
         assertEquals(1, response.getData().size());
 
         // 验证关键方法调用
-        verify(templateVectorSearchService).searchSimilarTemplates(anyString(), isNull(), eq(5));
+        verify(templateVectorStoreService).searchSystemTemplates(anyString(), isNull(), eq(5));
         verify(queryTemplateService).getById(1L);
         verify(queryTemplateService).incrementUsageCount(1L);
         verify(queryExecutorService).executeQuery(eq(1L), anyString());
@@ -209,7 +200,7 @@ class TextToSQLServicePathTest {
     @Test
     void testPath1_FailureFallbackToPath2() throws Exception {
         // Mock 模板搜索失败
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenThrow(new RuntimeException("模板搜索服务异常"));
 
         // Mock 路径2的依赖
@@ -226,7 +217,7 @@ class TextToSQLServicePathTest {
         assertNull(response.getTemplateId());
 
         // 验证降级逻辑
-        verify(templateVectorSearchService).searchSimilarTemplates(anyString(), isNull(), eq(5));
+        verify(templateVectorStoreService).searchSystemTemplates(anyString(), isNull(), eq(5));
         verify(schemaVectorStoreService).searchSchemas(anyString(), isNull(), eq(10));
     }
 
@@ -236,7 +227,7 @@ class TextToSQLServicePathTest {
     @Test
     void testPath2_SchemaRAGWithBFS() throws Exception {
         // Mock 模板搜索返回空结果，触发路径2
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(new ArrayList<>());
 
         // Mock 路径2的依赖
@@ -340,7 +331,7 @@ class TextToSQLServicePathTest {
     @Test
     void testConfigurationParameters() throws Exception {
         // Mock 空模板搜索结果，触发路径2
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(new ArrayList<>());
 
         mockPath2Dependencies();
@@ -379,7 +370,7 @@ class TextToSQLServicePathTest {
             .thenReturn(createTestConversation());
 
         // Mock 所有路径都失败的情况
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenThrow(new RuntimeException("模板搜索失败"));
         when(schemaVectorStoreService.searchSchemas(anyString(), isNull(), anyInt()))
             .thenThrow(new RuntimeException("Schema搜索失败"));
@@ -402,15 +393,15 @@ class TextToSQLServicePathTest {
     @Test
     void testSQLExecutionFailure() throws Exception {
         // Mock 模板匹配成功但SQL执行失败
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(1L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.85);
+        searchResult.setSimilarity(0.85);
 
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(1L)).thenReturn(testTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))
@@ -482,8 +473,6 @@ class TextToSQLServicePathTest {
             .thenReturn(new ArrayList<>());
         when(relationshipService.listAll())
             .thenReturn(new ArrayList<>());
-        when(intentFewShotService.getFewShotExamples(isNull(), anyString()))
-            .thenReturn("示例：查询广告主数据");
 
         // Mock LLM生成执行计划
         when(aiService.generateSQL(anyString(), anyString()))
@@ -531,8 +520,6 @@ class TextToSQLServicePathTest {
             .thenReturn(new ArrayList<>());
         when(relationshipService.listAll())
             .thenReturn(new ArrayList<>());
-        when(intentFewShotService.getFewShotExamples(isNull(), anyString()))
-            .thenReturn("示例：查询广告主数据");
         when(aiService.generateSQL(anyString(), anyString()))
             .thenReturn("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
         when(conversationService.create(anyLong(), anyString(), isNull()))

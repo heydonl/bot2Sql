@@ -63,4 +63,14 @@ public interface QueryLogMapper {
     QueryLog findByQuestionAndSql(@Param("question") String question,
                                   @Param("sql") String sql,
                                   @Param("datasourceId") Long datasourceId);
+
+    /**
+     * 查询最近的失败案例（执行失败或用户不满意）
+     */
+    List<QueryLog> selectRecentFailedCases(@Param("limit") int limit);
+
+    /**
+     * 查询指定会话中的失败案例（执行失败或用户不满意）
+     */
+    List<QueryLog> selectFailedCasesByConversation(@Param("conversationId") Long conversationId, @Param("limit") int limit);
 }

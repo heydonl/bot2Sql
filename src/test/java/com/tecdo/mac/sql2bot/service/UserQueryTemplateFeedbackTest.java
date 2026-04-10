@@ -34,17 +34,14 @@ class UserQueryTemplateFeedbackTest {
     @Mock private QueryExecutorService queryExecutorService;
     @Mock private ConversationService conversationService;
     @Mock private MessageService messageService;
-    @Mock private IntentAnalysisService intentAnalysisService;
     @Mock private QueryTemplateService queryTemplateService;
     @Mock private TemplateParameterService templateParameterService;
     @Mock private QueryLogService queryLogService;
     @Mock private SchemaVectorStoreService schemaVectorStoreService;
     @Mock private EmbeddingService embeddingService;
-    @Mock private TemplateVectorSearchService templateVectorSearchService;
     @Mock private ModelService modelService;
     @Mock private RelationshipService relationshipService;
     @Mock private ColumnDefinitionService columnDefinitionService;
-    @Mock private IntentFewShotService intentFewShotService;
     @Mock private DataSourceService dataSourceService;
     @Mock private DatabaseService databaseService;
     @Mock private QueryStepLogService queryStepLogService;
@@ -185,7 +182,6 @@ class UserQueryTemplateFeedbackTest {
         when(modelService.listAll()).thenReturn(java.util.Collections.emptyList());
         when(relationshipService.listAll()).thenReturn(java.util.Collections.emptyList());
         when(columnDefinitionService.getByModelId(anyLong())).thenReturn(java.util.Collections.emptyList());
-        when(intentFewShotService.getFewShotExamples(any(), anyString())).thenReturn("");
         when(aiService.generateSQL(anyString(), anyString())).thenReturn("[]");
         when(queryLogService.logQuery(any())).thenReturn(103L);
 

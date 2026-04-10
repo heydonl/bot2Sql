@@ -44,6 +44,7 @@ public class RedisConfig {
         poolConfig.setMaxTotal(8);
         poolConfig.setMaxIdle(8);
         poolConfig.setMinIdle(0);
+        poolConfig.setJmxEnabled(false);
         return new JedisPool(poolConfig, redisHost, redisPort);
     }
 

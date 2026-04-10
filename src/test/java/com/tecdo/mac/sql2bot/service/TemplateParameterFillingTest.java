@@ -50,9 +50,6 @@ class TemplateParameterFillingTest {
     private MessageService messageService;
 
     @Mock
-    private IntentAnalysisService intentAnalysisService;
-
-    @Mock
     private QueryTemplateService queryTemplateService;
 
     @Mock
@@ -68,7 +65,10 @@ class TemplateParameterFillingTest {
     private EmbeddingService embeddingService;
 
     @Mock
-    private TemplateVectorSearchService templateVectorSearchService;
+    private TemplateVectorStoreService templateVectorStoreService;
+
+    @Mock
+    private UserQueryTemplateService userQueryTemplateService;
 
     @Mock
     private ModelService modelService;
@@ -78,9 +78,6 @@ class TemplateParameterFillingTest {
 
     @Mock
     private ColumnDefinitionService columnDefinitionService;
-
-    @Mock
-    private IntentFewShotService intentFewShotService;
 
     @Mock
     private DataSourceService dataSourceService;
@@ -124,8 +121,8 @@ class TemplateParameterFillingTest {
         // 初始化测试模板
         testTemplate = new QueryTemplate();
         testTemplate.setId(1L);
-        testTemplate.setSqlTemplate("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
-        testTemplate.setParameters("{\"advertiserId\":\"广告主ID\"}");
+        testTemplate.setQuestion("查询广告主的数据");
+        testTemplate.setGeneratedSql("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
 
         // 初始化测试查询日志
         testQueryLog = new QueryLog();
@@ -147,16 +144,16 @@ class TemplateParameterFillingTest {
     @Test
     void testTemplateParameterFilling_ThroughTemplateMatch() throws Exception {
         // 准备模板搜索结果
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(1L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.85);
+        searchResult.setSimilarity(0.85);
 
         // Mock 依赖调用
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(1L)).thenReturn(testTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))
@@ -193,22 +190,22 @@ class TemplateParameterFillingTest {
         // 创建复杂模板
         QueryTemplate complexTemplate = new QueryTemplate();
         complexTemplate.setId(2L);
-        complexTemplate.setSqlTemplate("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}} AND date >= '{{startDate}}'\",\"datasource_id\":1}]");
-        complexTemplate.setParameters("{\"advertiserId\":\"广告主ID\",\"startDate\":\"开始日期\"}");
+        complexTemplate.setQuestion("查询广告主在某时间段的数据");
+        complexTemplate.setGeneratedSql("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}} AND date >= '{{startDate}}'\",\"datasource_id\":1}]");
 
         testRequest.setQuestion("查询广告主123在2024年1月的数据");
 
         // 准备模板搜索结果
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(2L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.80);
+        searchResult.setSimilarity(0.80);
 
         // Mock 依赖调用
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(2L)).thenReturn(complexTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))
@@ -243,16 +240,16 @@ class TemplateParameterFillingTest {
     @Test
     void testTemplateParameterFilling_WithExampleContext() throws Exception {
         // 准备有历史示例的模板搜索结果
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(1L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.85);
+        searchResult.setSimilarity(0.85);
 
         // Mock 依赖调用，包括示例查询
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(1L)).thenReturn(testTemplate);
         when(queryLogService.getBestExampleByTemplateId(1L)).thenReturn(testQueryLog);
@@ -284,16 +281,16 @@ class TemplateParameterFillingTest {
     @Test
     void testTemplateParameterFilling_AIServiceException() throws Exception {
         // 准备模板搜索结果
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(1L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.85);
+        searchResult.setSimilarity(0.85);
 
         // Mock AI服务抛出异常，且路径2也失败（schema搜索失败）
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(1L)).thenReturn(testTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))
@@ -321,20 +318,20 @@ class TemplateParameterFillingTest {
         // 创建包含JSON格式SQL模板的模板
         QueryTemplate jsonTemplate = new QueryTemplate();
         jsonTemplate.setId(3L);
-        jsonTemplate.setSqlTemplate("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
-        jsonTemplate.setParameters("{\"advertiserId\":\"广告主ID\"}");
+        jsonTemplate.setQuestion("查询广告主的数据");
+        jsonTemplate.setGeneratedSql("[{\"sql_template\":\"SELECT * FROM advertiser WHERE id = {{advertiserId}}\",\"datasource_id\":1}]");
 
         // 准备模板搜索结果
-        TemplateVectorSearchService.TemplateSearchResult searchResult =
-            new TemplateVectorSearchService.TemplateSearchResult();
-        TemplateVectorSearchService.TemplateMeta meta =
-            new TemplateVectorSearchService.TemplateMeta();
+        TemplateVectorStoreService.TemplateSearchResult searchResult =
+            new TemplateVectorStoreService.TemplateSearchResult();
+        TemplateVectorStoreService.TemplateMeta meta =
+            new TemplateVectorStoreService.TemplateMeta();
         meta.setTemplateId(3L);
         searchResult.setMeta(meta);
-        searchResult.setScore(0.90);
+        searchResult.setSimilarity(0.90);
 
         // Mock 依赖调用
-        when(templateVectorSearchService.searchSimilarTemplates(anyString(), isNull(), eq(5)))
+        when(templateVectorStoreService.searchSystemTemplates(anyString(), isNull(), eq(5)))
             .thenReturn(List.of(searchResult));
         when(queryTemplateService.getById(3L)).thenReturn(jsonTemplate);
         when(conversationService.create(anyLong(), anyString(), isNull()))

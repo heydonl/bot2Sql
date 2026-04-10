@@ -10,8 +10,6 @@ import com.tecdo.mac.sql2bot.domain.UserQueryTemplate;
 import com.tecdo.mac.sql2bot.dto.QueryRequest;
 import com.tecdo.mac.sql2bot.dto.QueryResponse;
 import com.tecdo.mac.sql2bot.dto.SqlStep;
-import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisRequest;
-import com.tecdo.mac.sql2bot.dto.intent.IntentAnalysisResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,18 +38,15 @@ public class TextToSQLService {
     private final QueryExecutorService queryExecutorService;
     private final ConversationService conversationService;
     private final MessageService messageService;
-    private final IntentAnalysisService intentAnalysisService;
     private final QueryTemplateService queryTemplateService;
     private final TemplateParameterService templateParameterService;
     private final QueryLogService queryLogService;
     private final SchemaVectorStoreService schemaVectorStoreService;
     private final EmbeddingService embeddingService;
-    private final TemplateVectorSearchService templateVectorSearchService;
     private final ObjectMapper objectMapper;
     private final ModelService modelService;
     private final RelationshipService relationshipService;
     private final ColumnDefinitionService columnDefinitionService;
-    private final IntentFewShotService intentFewShotService;
     private final DataSourceService dataSourceService;
     private final DatabaseService databaseService;
     private final QueryStepLogService queryStepLogService;
@@ -122,108 +117,92 @@ public class TextToSQLService {
 
             // 5. 路径3：用户不满意，直接走高召回 BFS 路径
             if (Boolean.FALSE.equals(request.getSatisfied()) && request.getRetryQueryLogId() != null) {
+                // 降低来源用户模板评分
+                QueryLog retryLog = queryLogService.findById(request.getRetryQueryLogId());
+                if (retryLog != null && "user_template".equals(retryLog.getSourceType())) {
+                    userQueryTemplateService.updateScoreOnUnsatisfied(retryLog.getSourceTemplateId());
+                }
                 log.info("用户不满意，触发BFS高召回重试: queryLogId={}", request.getRetryQueryLogId());
-                List<SqlStep> steps = generatePlanByBFSWithHighRecall(request.getQuestion());
+                List<SqlStep> steps = generatePlanByBFSWithHighRecall(request.getQuestion(), request.getRetryQueryLogId());
                 return executePlan(request.getQuestion(), steps, conversationId, request,
                     null, "bfs", 0.0, startTime);
             }
 
-            // 6. 路径1：RAG 模板检索（高准确性）- 支持用户模板和意图Few-shot
+            // 6. 路径1：RAG 模板检索（高准确性）- 支持用户模板和系统模板
             QueryTemplate matchedTemplate = null;
             UserQueryTemplate matchedUserTemplate = null;
             double templateSimilarity = 0.0;
             log.info("开始RAG模板检索: question={}", request.getQuestion());
 
-            // 先搜索用户模板
+            // 1. 先搜索系统模板（query_template）
+            QueryTemplate matchedSystemTemplate = null;
             try {
-                List<TemplateVectorStoreService.TemplateSearchResult> userTemplateResults =
-                    templateVectorStoreService.searchSimilarUserTemplates(
+                List<TemplateVectorStoreService.TemplateSearchResult> systemTemplateResults =
+                    templateVectorStoreService.searchSystemTemplates(
                         request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
-                if (!userTemplateResults.isEmpty()) {
-                    TemplateVectorStoreService.TemplateSearchResult bestMatch = userTemplateResults.get(0);
+                if (!systemTemplateResults.isEmpty()) {
+                    TemplateVectorStoreService.TemplateSearchResult bestMatch = systemTemplateResults.get(0);
                     templateSimilarity = bestMatch.getSimilarity();
                     if (templateSimilarity >= templateSearchSimilarityThreshold) {
-                        UserQueryTemplate candidate = userQueryTemplateService.findById(bestMatch.getMeta().getTemplateId());
+                        QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
                         if (candidate != null) {
-                            matchedUserTemplate = candidate;
-                            log.info("用户模板匹配成功: userTemplateId={}, similarity={}",
-                                    matchedUserTemplate.getId(), templateSimilarity);
+                            matchedSystemTemplate = candidate;
+                            log.info("系统模板匹配成功: templateId={}, similarity={}",
+                                    matchedSystemTemplate.getId(), templateSimilarity);
                         }
                     }
                 }
             } catch (Exception e) {
-                log.error("用户模板检索失败", e);
+                log.error("系统模板检索失败", e);
             }
 
-            // 如果用户模板未匹配，再搜索意图Few-shot
-            if (matchedUserTemplate == null) {
+            // 2. 如果系统模板未匹配，再搜索用户模板（user_query_template）
+            if (matchedSystemTemplate == null && matchedUserTemplate == null) {
                 try {
-                    List<TemplateVectorSearchService.TemplateSearchResult> templateResults =
-                        templateVectorSearchService.searchSimilarTemplates(
+                    List<TemplateVectorStoreService.TemplateSearchResult> userTemplateResults =
+                        templateVectorStoreService.searchUserTemplates(
                             request.getQuestion(), null, MAX_TEMPLATE_CANDIDATES);
-                    if (!templateResults.isEmpty()) {
-                        TemplateVectorSearchService.TemplateSearchResult bestMatch = templateResults.get(0);
+                    if (!userTemplateResults.isEmpty()) {
+                        TemplateVectorStoreService.TemplateSearchResult bestMatch = userTemplateResults.get(0);
                         templateSimilarity = bestMatch.getSimilarity();
                         if (templateSimilarity >= templateSearchSimilarityThreshold) {
-                            QueryTemplate candidate = queryTemplateService.getById(bestMatch.getMeta().getTemplateId());
+                            UserQueryTemplate candidate = userQueryTemplateService.findById(bestMatch.getMeta().getTemplateId());
                             if (candidate != null) {
-                                matchedTemplate = candidate;
-                                log.info("意图Few-shot匹配成功: templateId={}, similarity={}",
-                                        matchedTemplate.getId(), templateSimilarity);
+                                matchedUserTemplate = candidate;
+                                log.info("用户模板匹配成功: userTemplateId={}, similarity={}",
+                                        matchedUserTemplate.getId(), templateSimilarity);
                             }
                         } else {
                             log.info("模板相似度不足，降级到路径2: similarity={}, threshold={}",
                                 templateSimilarity, templateSearchSimilarityThreshold);
                         }
                     } else {
-                        log.info("未找到符合条件的SQL模板，降级到路径2");
+                        log.info("未找到符合条件的模板，降级到路径2");
                     }
                 } catch (Exception e) {
-                    log.error("意图Few-shot检索失败，降级到路径2", e);
+                    log.error("用户模板检索失败，降级到路径2", e);
                 }
             }
 
             // 处理用户模板匹配
             if (matchedUserTemplate != null) {
-                try {
-                    List<SqlStep> steps = parseSqlSteps(matchedUserTemplate.getGeneratedSql());
-                    if (steps == null || steps.isEmpty()) {
-                        log.warn("用户模板SQL解析失败，降级到路径2: userTemplateId={}", matchedUserTemplate.getId());
-                    } else {
-                        log.info("路径1 用户模板匹配成功: userTemplateId={}, steps={}", matchedUserTemplate.getId(), steps.size());
-                        return executePlan(request.getQuestion(), steps, conversationId, request,
-                            matchedUserTemplate.getId(), "user_template", templateSimilarity, startTime);
-                    }
-                } catch (Exception e) {
-                    log.error("路径1 用户模板处理失败，降级到路径2", e);
-                }
+                String prompt = buildUserTemplateParameterPrompt(matchedUserTemplate, request.getQuestion());
+                QueryResponse resp = executeTemplatePath1(prompt, matchedUserTemplate.getId(), "user_template",
+                        templateSimilarity, request, conversationId, startTime);
+                if (resp != null) return resp;
             }
 
-            // 处理意图Few-shot匹配
+            // 处理系统模板匹配
             if (matchedTemplate != null) {
-                try {
-                    // 路径1：使用 LLM 基于模板和示例生成参数填充的执行计划
-                    String prompt = buildTemplateParameterPrompt(matchedTemplate, request.getQuestion());
-                    String llmResp = aiService.generateSQL(prompt, "请根据模板和问题生成参数填充的SQL执行计划。");
-                    String jsonStr = extractJsonBlock(llmResp);
-                    if (jsonStr == null) jsonStr = llmResp.trim();
-                    List<SqlStep> steps = parseSqlSteps(jsonStr);
-                    if (steps == null) {
-                        log.warn("路径1 LLM参数填充解析失败，降级到路径2: templateId={}", matchedTemplate.getId());
-                    } else {
-                        queryTemplateService.incrementUsageCount(matchedTemplate.getId());
-                        log.info("路径1 参数填充成功: templateId={}, steps={}", matchedTemplate.getId(), steps.size());
-                        return executePlan(request.getQuestion(), steps, conversationId, request,
-                            matchedTemplate.getId(), "intent_few_shot", templateSimilarity, startTime);
-                    }
-                } catch (Exception e) {
-                    log.error("路径1 处理失败，降级到路径2", e);
-                }
+                String prompt = buildTemplateParameterPrompt(matchedTemplate, request.getQuestion());
+                QueryResponse resp = executeTemplatePath1(prompt, matchedTemplate.getId(), "system_template",
+                        templateSimilarity, request, conversationId, startTime);
+                if (resp != null) return resp;
             }
 
             // 7. 路径2：Schema RAG + BFS扩表 + LLM
             log.info("进入路径2: Schema RAG + BFS扩表 + LLM");
-            List<SqlStep> steps = generatePlanByBFSNormal(request.getQuestion());
+            List<SqlStep> steps = generatePlanByBFSNormal(request.getQuestion(), request.getRetryQueryLogId());
             return executePlan(request.getQuestion(), steps, conversationId, request,
                 null, "bfs", 0.0, startTime);
 
@@ -239,7 +218,6 @@ public class TextToSQLService {
     /**
      * 处理用户反馈
      */
-    @Transactional
     private void handleUserFeedback(QueryRequest request) {
         Long queryLogId = request.getRetryQueryLogId();
         Boolean satisfied = request.getSatisfied();
@@ -250,13 +228,19 @@ public class TextToSQLService {
         }
 
         if (queryLog.getSatisfied() != null) {
-            throw new IllegalStateException("该查询已评价过: id=" + queryLogId);
+            if (Boolean.TRUE.equals(queryLog.getSatisfied())) {
+                // 已满意的不允许再评价
+                throw new IllegalStateException("该查询已评价为满意，无法再次评价: id=" + queryLogId);
+            }
+            // 已不满意的允许继续走重试流程，跳过重复写入
+            log.info("该查询已评价为不满意，跳过重复写入，继续重试: id={}", queryLogId);
+            return;
         }
 
         queryLogService.updateSatisfied(queryLogId, satisfied);
 
-        // 来自意图Few-shot的查询不沉淀为用户模板
-        if ("intent_few_shot".equals(queryLog.getSourceType())) {
+        // 来自系统模板的查询不沉淀为用户模板
+        if ("system_template".equals(queryLog.getSourceType())) {
             return;
         }
 
@@ -284,11 +268,6 @@ public class TextToSQLService {
                 }
             } else {
                 userQueryTemplateService.updateScoreOnSatisfied(existing.getId());
-            }
-        } else {
-            if ("user_template".equals(queryLog.getSourceType())) {
-                Long templateId = queryLog.getSourceTemplateId();
-                userQueryTemplateService.updateScoreOnUnsatisfied(templateId);
             }
         }
     }
@@ -340,11 +319,9 @@ public class TextToSQLService {
 
         prompt.append("根据以下SQL模板和用户问题，生成具体的参数值：\n\n");
 
-        prompt.append("## SQL模板\n").append(template.getSqlTemplate()).append("\n\n");
+        prompt.append("## SQL模板\n").append(template.getGeneratedSql()).append("\n\n");
 
-        prompt.append("## 参数定义\n").append(template.getParameters()).append("\n\n");
-
-        // 添加 few-shot 示例
+        // 添加历史查询示例
         try {
             QueryLog example = queryLogService.getBestExampleByTemplateId(template.getId());
 
@@ -516,6 +493,16 @@ public class TextToSQLService {
             Long conversationId, QueryRequest request,
             Long sourceTemplateId, String sourceType,
             double templateSimilarity, long startTime) {
+        return executePlanWithRetry(question, steps, conversationId, request,
+            sourceTemplateId, sourceType, templateSimilarity, startTime, 0, null);
+    }
+
+    private QueryResponse executePlanWithRetry(String question, List<SqlStep> steps,
+            Long conversationId, QueryRequest request,
+            Long sourceTemplateId, String sourceType,
+            double templateSimilarity, long startTime, int retryCount, String lastError) {
+
+        final int MAX_RETRIES = 10;
 
         if (steps == null || steps.isEmpty()) {
             String err = "执行计划为空";
@@ -523,7 +510,7 @@ public class TextToSQLService {
             return QueryResponse.error(err);
         }
 
-        String explanation = "intent_few_shot".equals(sourceType) ? "通过意图Few-shot匹配生成查询" :
+        String explanation = "system_template".equals(sourceType) ? "通过系统模板匹配生成查询" :
                              "user_template".equals(sourceType) ? "通过用户模板匹配生成查询" :
                              "通过BFS表发现生成查询";
         List<Map<String, Object>> prevResult = null;
@@ -593,7 +580,7 @@ public class TextToSQLService {
                 stepLog.setExecutionTime(System.currentTimeMillis() - stepStartTime);
                 stepLogs.add(stepLog);
             } catch (Exception e) {
-                log.error("步骤执行失败: sql={}", filledSql, e);
+                log.error("步骤执行失败: sql={}, retryCount={}", filledSql, retryCount, e);
 
                 stepLog.setFilledSql(filledSql);
                 stepLog.setExecutionSuccess(false);
@@ -602,6 +589,7 @@ public class TextToSQLService {
                 stepLogs.add(stepLog);
 
                 // 记录失败日志
+                Long failedQueryLogId = null;
                 try {
                     QueryLog queryLog = new QueryLog();
                     queryLog.setUserId(request.getUserId());
@@ -616,13 +604,36 @@ public class TextToSQLService {
                     queryLog.setExecutionSuccess(false);
                     queryLog.setExecutionTime(System.currentTimeMillis() - startTime);
                     queryLog.setDatasourceId(datasourceId);
-                    final Long failedQueryLogId = queryLogService.logQuery(queryLog);
-                    stepLogs.forEach(sl -> sl.setQueryLogId(failedQueryLogId));
-                    try { queryStepLogService.logSteps(stepLogs); } catch (Exception ex) { log.warn("记录步骤日志失败", ex); }
+                    queryLog.setErrorMessage(e.getMessage());
+                    failedQueryLogId = queryLogService.logQuery(queryLog);
+
+                    if (failedQueryLogId != null) {
+                        final Long finalFailedQueryLogId = failedQueryLogId;
+                        stepLogs.forEach(sl -> sl.setQueryLogId(finalFailedQueryLogId));
+                        try { queryStepLogService.logSteps(stepLogs); } catch (Exception ex) { log.warn("记录步骤日志失败", ex); }
+                    }
                 } catch (Exception logEx) {
                     log.warn("记录失败日志异常", logEx);
                 }
-                String err = "SQL执行失败: " + e.getMessage();
+
+                // 如果未达到最大重试次数，自动重试
+                if (retryCount < MAX_RETRIES) {
+                    log.info("SQL执行失败，尝试第 {} 次重试，错误信息: {}", retryCount + 1, e.getMessage());
+
+                    // 使用失败的 queryLogId 重新生成 SQL
+                    try {
+                        List<SqlStep> newSteps = generatePlanByBFSNormal(question, failedQueryLogId);
+                        if (newSteps != null && !newSteps.isEmpty()) {
+                            return executePlanWithRetry(question, newSteps, conversationId, request,
+                                sourceTemplateId, sourceType, templateSimilarity, startTime, retryCount + 1, e.getMessage());
+                        }
+                    } catch (Exception retryEx) {
+                        log.error("重试生成SQL失败", retryEx);
+                    }
+                }
+
+                // 达到最大重试次数或重试失败，返回错误
+                String err = "SQL执行失败（已重试" + retryCount + "次）: " + e.getMessage();
                 if (conversationId != null) messageService.saveErrorMessage(conversationId, err);
                 return QueryResponse.error(err);
             }
@@ -672,7 +683,7 @@ public class TextToSQLService {
     /**
      * 路径2：正常召回 + 相似度过滤 + BFS扩表 + LLM 生成执行计划
      */
-    private List<SqlStep> generatePlanByBFSNormal(String question) {
+    private List<SqlStep> generatePlanByBFSNormal(String question, Long retryQueryLogId) {
         List<SchemaVectorStoreService.SchemaSearchResult> schemaResults =
             schemaVectorStoreService.searchSchemas(question, null, schemaSearchTopK);
         Set<Long> seedModelIds = schemaResults.stream()
@@ -694,13 +705,13 @@ public class TextToSQLService {
             }
         }
         Set<Long> allModelIds = expandByBFS(seedModelIds, 2);
-        return generatePlanWithBFSContext(question, allModelIds);
+        return generatePlanWithBFSContext(question, allModelIds, retryQueryLogId);
     }
 
     /**
      * 路径3：高召回（不做相似度过滤）+ BFS扩表 + LLM 生成执行计划
      */
-    private List<SqlStep> generatePlanByBFSWithHighRecall(String question) {
+    private List<SqlStep> generatePlanByBFSWithHighRecall(String question, Long retryQueryLogId) {
         List<SchemaVectorStoreService.SchemaSearchResult> schemaResults =
             schemaVectorStoreService.searchSchemas(question, null, schemaSearchBfsRetryTopK);
         Set<Long> seedModelIds = schemaResults.stream()
@@ -712,7 +723,7 @@ public class TextToSQLService {
             return null;
         }
         Set<Long> allModelIds = expandByBFS(seedModelIds, 2);
-        return generatePlanWithBFSContext(question, allModelIds);
+        return generatePlanWithBFSContext(question, allModelIds, retryQueryLogId);
     }
 
     /**
@@ -748,7 +759,7 @@ public class TextToSQLService {
     /**
      * 根据 modelId 集合构建完整上下文，调用 LLM 生成多步骤执行计划
      */
-    private List<SqlStep> generatePlanWithBFSContext(String question, Set<Long> modelIds) {
+    private List<SqlStep> generatePlanWithBFSContext(String question, Set<Long> modelIds, Long retryQueryLogId) {
         try {
             List<com.tecdo.mac.sql2bot.domain.Model> models = new ArrayList<>();
             Map<Long, List<com.tecdo.mac.sql2bot.domain.ColumnDefinition>> columnsMap = new HashMap<>();
@@ -770,7 +781,8 @@ public class TextToSQLService {
                               && validModelIds.contains(r.getToModelId()))
                     .collect(java.util.stream.Collectors.toList());
 
-            String fewShot = intentFewShotService.getFewShotExamples(null, question);
+            // 获取系统模板作为参考示例
+            String templateExamples = buildExamplesFromQueryTemplates();
 
             StringBuilder systemPrompt = new StringBuilder();
             systemPrompt.append("你是一个SQL生成专家。根据以下数据库结构，为用户问题生成多步骤SQL执行计划。\n\n");
@@ -785,7 +797,7 @@ public class TextToSQLService {
                 List<com.tecdo.mac.sql2bot.domain.ColumnDefinition> cols = columnsMap.get(m.getId());
                 if (cols != null) {
                     for (com.tecdo.mac.sql2bot.domain.ColumnDefinition col : cols) {
-                        systemPrompt.append("- ").append(col.getColumnName());
+                        systemPrompt.append("- ").append(m.getTableName()).append(".").append(col.getColumnName());
                         if (col.getColumnType() != null) systemPrompt.append(" (").append(col.getColumnType()).append(")");
                         if (col.getDisplayName() != null) systemPrompt.append(" - ").append(col.getDisplayName());
                         if (col.getDescription() != null) systemPrompt.append(": ").append(col.getDescription());
@@ -828,8 +840,52 @@ public class TextToSQLService {
             }
             systemPrompt.append("\n");
 
-            if (fewShot != null && !fewShot.trim().isEmpty()) {
-                systemPrompt.append("## 参考示例\n").append(fewShot).append("\n\n");
+            if (templateExamples != null && !templateExamples.trim().isEmpty()) {
+                systemPrompt.append("## 参考示例\n").append(templateExamples).append("\n\n");
+            }
+
+            // 添加失败案例作为负面示例（当前会话中的所有失败案例）
+            if (retryQueryLogId != null) {
+                try {
+                    // 获取当前失败的查询记录，从中提取会话ID
+                    QueryLog currentFailedCase = queryLogService.findById(retryQueryLogId);
+                    if (currentFailedCase != null && currentFailedCase.getConversationId() != null) {
+                        // 获取当前会话中的所有失败案例
+                        List<QueryLog> failedCases = queryLogService.getFailedCasesByConversation(
+                            currentFailedCase.getConversationId(), 10);
+
+                        if (!failedCases.isEmpty()) {
+                            systemPrompt.append("## 错误案例（请避免犯同样的错误）\n");
+                            systemPrompt.append("以下是本次会话中的失败尝试，请分析错误原因并避免重复：\n\n");
+
+                            for (int i = 0; i < failedCases.size(); i++) {
+                                QueryLog failedCase = failedCases.get(i);
+                                systemPrompt.append("### 错误案例 ").append(i + 1).append("\n");
+                                systemPrompt.append("问题: ").append(failedCase.getQuestion()).append("\n");
+                                systemPrompt.append("错误的SQL: ").append(failedCase.getGeneratedSql()).append("\n");
+
+                                if (failedCase.getExecutionSuccess() != null && !failedCase.getExecutionSuccess()) {
+                                    systemPrompt.append("错误原因: SQL执行失败");
+                                    if (failedCase.getErrorMessage() != null) {
+                                        systemPrompt.append("，数据库报错: ").append(failedCase.getErrorMessage());
+                                    }
+                                    systemPrompt.append("\n");
+                                } else if (Boolean.FALSE.equals(failedCase.getSatisfied())) {
+                                    systemPrompt.append("错误原因: 用户反馈不满意\n");
+                                }
+                                systemPrompt.append("\n");
+                            }
+
+                            systemPrompt.append("注意: 请仔细分析上述错误案例，避免生成类似的错误SQL。")
+                                      .append("特别注意字段归属、表名使用、数据类型匹配等问题。\n\n");
+
+                            log.info("已添加会话失败案例到Prompt: conversationId={}, failedCasesCount={}",
+                                currentFailedCase.getConversationId(), failedCases.size());
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("获取会话失败案例失败，跳过: {}", e.getMessage());
+                }
             }
 
             systemPrompt.append("## 输出要求\n");
@@ -839,7 +895,9 @@ public class TextToSQLService {
             systemPrompt.append("- datasource_id 必须与表所属的数据源一致\n");
             systemPrompt.append("- 如只需一步，也返回只含一个元素的数组\n");
             systemPrompt.append("- 只返回JSON数组，不要额外解释\n");
+            systemPrompt.append("- 字段归属约束：每个字段唯一属于其所在的表，SQL中必须使用 表名.字段名 的形式引用字段，禁止跨表混用字段\n");
 
+            log.info("BFS上下文Prompt已添加字段归属约束");
             String llmResponse = aiService.generateSQL(systemPrompt.toString(), question);
 
             // 提取 JSON 数组
@@ -1099,9 +1157,50 @@ public class TextToSQLService {
         }
 
         prompt.append("用户问题: ").append(question).append("\n");
-        prompt.append("初始模板:\n```json\n").append(template.getSqlTemplate()).append("\n```\n\n");
+        prompt.append("初始模板:\n```json\n").append(template.getGeneratedSql()).append("\n```\n\n");
         prompt.append("请返回填充了 params 字段的完整 JSON 数组，用 ```json ``` 包裹。\n");
         return prompt.toString();
+    }
+
+    /**
+     * 构建路径1的用户模板参数填充 Prompt
+     */
+    private String buildUserTemplateParameterPrompt(UserQueryTemplate template, String question) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("# 角色\n");
+        prompt.append("你是一名 SQL 专家，擅长根据用户问题生成多步骤的 SQL 执行计划。\n\n");
+        prompt.append("# 任务\n");
+        prompt.append("你将获得一个历史问题及其对应的 SQL 执行计划（JSON 数组），请参考该示例，根据新问题生成适配的 SQL 执行计划。\n\n");
+        prompt.append("# 示例\n");
+        prompt.append("**历史问题**: ").append(template.getQuestion()).append("\n");
+        prompt.append("**历史SQL计划**:\n```json\n").append(template.getGeneratedSql()).append("\n```\n\n");
+        prompt.append("# 当前问题\n");
+        prompt.append("用户问题: ").append(question).append("\n\n");
+        prompt.append("请参考历史SQL计划，生成适配当前问题的完整 JSON 数组，用 ```json ``` 包裹。\n");
+        return prompt.toString();
+    }
+
+    /**
+     * 路径1公共执行逻辑：LLM参数填充 → 解析 → executePlan，失败则返回 null 降级
+     */
+    private QueryResponse executeTemplatePath1(String prompt, Long templateId, String sourceType,
+            double similarity, QueryRequest request, Long conversationId, long startTime) {
+        try {
+            String llmResp = aiService.generateSQL(prompt, "请根据模板和问题生成参数填充的SQL执行计划。");
+            String jsonStr = extractJsonBlock(llmResp);
+            if (jsonStr == null) jsonStr = llmResp.trim();
+            List<SqlStep> steps = parseSqlSteps(jsonStr);
+            if (steps == null) {
+                log.warn("路径1 LLM参数填充解析失败，降级到路径2: sourceType={}, templateId={}", sourceType, templateId);
+                return null;
+            }
+            log.info("路径1 参数填充成功: sourceType={}, templateId={}, steps={}", sourceType, templateId, steps.size());
+            return executePlan(request.getQuestion(), steps, conversationId, request,
+                    templateId, sourceType, similarity, startTime);
+        } catch (Exception e) {
+            log.error("路径1 处理失败，降级到路径2: sourceType={}, templateId={}", sourceType, templateId, e);
+            return null;
+        }
     }
 
     /**
@@ -1153,6 +1252,34 @@ public class TextToSQLService {
             }
         }
         return sql;
+    }
+
+    /**
+     * 从 query_template 表构建参考示例
+     */
+    private String buildExamplesFromQueryTemplates() {
+        try {
+            // 获取评分较高的系统模板作为示例
+            List<QueryTemplate> templates = queryTemplateService.getTopRatedTemplates(3);
+            if (templates.isEmpty()) {
+                return "";
+            }
+
+            StringBuilder examples = new StringBuilder();
+            examples.append("## 参考示例\n");
+
+            for (int i = 0; i < templates.size(); i++) {
+                QueryTemplate template = templates.get(i);
+                examples.append("### 示例 ").append(i + 1).append("\n");
+                examples.append("问题: ").append(template.getQuestion()).append("\n");
+                examples.append("SQL: ").append(template.getGeneratedSql()).append("\n\n");
+            }
+
+            return examples.toString();
+        } catch (Exception e) {
+            log.warn("构建参考示例失败", e);
+            return "";
+        }
     }
 
     /**

@@ -74,19 +74,18 @@ public class QueryFeedbackService {
                 return;
             }
 
-            // 计算新的平均评分
-            int currentRatingCount = template.getRatingCount() != null ? template.getRatingCount() : 0;
+            // 计算新的平均评分（简化：使用 usageCount 作为评分次数的近似）
+            int currentUsageCount = template.getUsageCount() != null ? template.getUsageCount() : 0;
             BigDecimal currentScore = template.getScore() != null ? template.getScore() : BigDecimal.ZERO;
 
-            BigDecimal totalScore = currentScore.multiply(BigDecimal.valueOf(currentRatingCount));
+            BigDecimal totalScore = currentScore.multiply(BigDecimal.valueOf(currentUsageCount));
             totalScore = totalScore.add(BigDecimal.valueOf(rating));
 
-            int newRatingCount = currentRatingCount + 1;
-            BigDecimal newScore = totalScore.divide(BigDecimal.valueOf(newRatingCount), 2, RoundingMode.HALF_UP);
+            int newCount = currentUsageCount + 1;
+            BigDecimal newScore = totalScore.divide(BigDecimal.valueOf(newCount), 2, RoundingMode.HALF_UP);
 
             // 更新模板评分
             template.setScore(newScore);
-            template.setRatingCount(newRatingCount);
             template.setUpdatedAt(LocalDateTime.now());
 
             queryTemplateService.updateTemplate(template);
@@ -94,8 +93,8 @@ public class QueryFeedbackService {
             // 更新向量存储中的模板信息
             templateVectorStoreService.indexTemplate(template);
 
-            log.info("更新模板评分: templateId={}, newScore={}, ratingCount={}",
-                    templateId, newScore, newRatingCount);
+            log.info("更新模板评分: templateId={}, newScore={}, usageCount={}",
+                    templateId, newScore, newCount);
 
         } catch (Exception e) {
             log.error("更新模板评分失败: templateId={}", templateId, e);

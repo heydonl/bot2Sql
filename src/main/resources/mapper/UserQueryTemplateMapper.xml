@@ -37,6 +37,11 @@
         WHERE id = #{id}
     </select>
 
+    <select id="selectAll" resultMap="UserQueryTemplateResultMap">
+        SELECT id, question, generated_sql, datasource_id, total_score, rating_count, avg_score, created_at, updated_at
+        FROM user_query_template
+    </select>
+
     <update id="updateScoreOnSatisfied">
         UPDATE user_query_template
         SET total_score = total_score + 1,

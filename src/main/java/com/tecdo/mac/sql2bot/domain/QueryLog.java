@@ -26,5 +26,6 @@ public class QueryLog {
     private Long retryFromId;  // 重试来源的query_log ID
     private String sourceType;  // 来源类型（user_template, system_template, bfs）
     private Long sourceTemplateId;  // 来源模板ID
+    private String errorMessage;  // SQL执行错误信息
     private LocalDateTime createdAt;
 }

@@ -196,10 +196,70 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_workspace_name ON workspace(name);
 CREATE INDEX IF NOT EXISTS idx_workspace_priority ON workspace(priority);
 CREATE INDEX IF NOT EXISTS idx_workspace_active ON workspace(is_active);
 
--- 12-15. 意图分析与模板系统表（query_template, template_rating, intent_few_shot, query_log）
--- 注：H2 测试环境暂不创建这些表，如需测试请参考 schema.sql
+-- 12. SQL 查询模板表
+CREATE TABLE IF NOT EXISTS query_template (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    question VARCHAR(500) NOT NULL,
+    generated_sql TEXT NOT NULL,
+    datasource_id BIGINT,
+    score DECIMAL(3,2) DEFAULT 1.00,
+    usage_count INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
--- 16. 查询步骤执行日志表
+CREATE UNIQUE INDEX IF NOT EXISTS uk_query_template_question_sql ON query_template(question, generated_sql);
+CREATE INDEX IF NOT EXISTS idx_query_template_score ON query_template(score DESC);
+CREATE INDEX IF NOT EXISTS idx_query_template_datasource ON query_template(datasource_id);
+
+-- 13. 模板评分记录表
+CREATE TABLE IF NOT EXISTS template_rating (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    template_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    score INT NOT NULL,
+    conversation_id BIGINT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_template_rating_template_user ON template_rating(template_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_template_rating_template_id ON template_rating(template_id);
+CREATE INDEX IF NOT EXISTS idx_template_rating_user_id ON template_rating(user_id);
+
+-- 14. 查询日志表
+CREATE TABLE IF NOT EXISTS query_log (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    conversation_id BIGINT,
+    question VARCHAR(500) NOT NULL,
+    intent VARCHAR(50),
+    intent_json TEXT,
+    skeleton VARCHAR(1000),
+    template_id BIGINT,
+    is_from_template BOOLEAN DEFAULT FALSE,
+    generated_sql TEXT,
+    execution_success BOOLEAN,
+    execution_time BIGINT,
+    result_count INT,
+    rating INT,
+    score DECIMAL(3,2) DEFAULT 0.00,
+    is_labeled BOOLEAN DEFAULT FALSE,
+    datasource_id BIGINT,
+    satisfied BOOLEAN,
+    retry_from_id BIGINT,
+    source_type VARCHAR(20),
+    source_template_id BIGINT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_log_user_id ON query_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_query_log_template_id ON query_log(template_id);
+CREATE INDEX IF NOT EXISTS idx_query_log_created_at ON query_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_query_log_intent ON query_log(intent);
+CREATE INDEX IF NOT EXISTS idx_query_log_retry_from ON query_log(retry_from_id);
+CREATE INDEX IF NOT EXISTS idx_query_log_source ON query_log(source_type, source_template_id);
+
+-- 15. 查询步骤执行日志表
 CREATE TABLE IF NOT EXISTS query_step_log (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   query_log_id BIGINT NOT NULL,
@@ -218,7 +278,7 @@ CREATE TABLE IF NOT EXISTS query_step_log (
 CREATE INDEX IF NOT EXISTS idx_query_step_log_query_log_id ON query_step_log(query_log_id);
 CREATE INDEX IF NOT EXISTS idx_query_step_log_step_id ON query_step_log(step_id);
 
--- 17. 用户查询模板表
+-- 16. 用户查询模板表
 CREATE TABLE IF NOT EXISTS user_query_template (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     question VARCHAR(500) NOT NULL,

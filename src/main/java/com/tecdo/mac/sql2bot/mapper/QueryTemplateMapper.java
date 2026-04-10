@@ -38,6 +38,8 @@ public interface QueryTemplateMapper {
 
     List<QueryTemplate> selectAll();
 
+    List<QueryTemplate> selectTopRated(@Param("limit") int limit);
+
     int updateById(QueryTemplate template);
 
     QueryTemplateStats getStats();

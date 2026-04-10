@@ -27,7 +27,6 @@ public class BFSTableDiscoveryService {
     private final ColumnDefinitionService columnDefinitionService;
     private final AIService aiService;
     private final QueryTemplateService queryTemplateService;
-    private final IntentFewShotService intentFewShotService;
     private final TemplateVectorStoreService templateVectorStoreService;
 
     /**
@@ -72,19 +71,16 @@ public class BFSTableDiscoveryService {
             // 4. 查找所有相关的表关系
             List<Relationship> allRelationships = findAllRelationships(discoveredModelIds);
 
-            // 5. 获取few-shot示例
-            String fewShotExamples = intentFewShotService.getFewShotExamples(datasourceId, question);
-
-            // 6. 构建上下文并生成新模板
+            // 5. 构建上下文并生成新模板
             String contextPrompt = buildBFSContextPrompt(
-                question, allModels, allColumns, allRelationships, fewShotExamples
+                question, allModels, allColumns, allRelationships, null
             );
 
             log.info("调用LLM生成新模板，上下文长度: {}", contextPrompt.length());
 
             String llmResponse = aiService.generateSQLTemplate(contextPrompt, question);
 
-            // 7. 解析LLM响应并创建新模板
+            // 6. 解析LLM响应并创建新模板
             QueryTemplate newTemplate = parseLLMResponseToTemplate(llmResponse, datasourceId);
 
             if (newTemplate != null) {
@@ -183,7 +179,7 @@ public class BFSTableDiscoveryService {
                                        List<Model> models,
                                        Map<Long, List<ColumnDefinition>> columns,
                                        List<Relationship> relationships,
-                                       String fewShotExamples) {
+                                       String templateExamples) {
         StringBuilder sb = new StringBuilder();
 
         sb.append("你是一个SQL模板生成专家。基于用户的问题和以下完整的数据库结构信息，生成一个可重用的SQL模板。\n\n");
@@ -233,9 +229,9 @@ public class BFSTableDiscoveryService {
         }
         sb.append("\n");
 
-        if (fewShotExamples != null && !fewShotExamples.trim().isEmpty()) {
+        if (templateExamples != null && !templateExamples.trim().isEmpty()) {
             sb.append("## 参考示例\n");
-            sb.append(fewShotExamples).append("\n\n");
+            sb.append(templateExamples).append("\n\n");
         }
 
         sb.append("## 要求\n");
@@ -243,12 +239,8 @@ public class BFSTableDiscoveryService {
         sb.append("2. 模板应该具有通用性，可以通过参数适配类似的查询\n");
         sb.append("3. 充分利用表关系进行JOIN操作\n");
         sb.append("4. 输出格式为JSON，包含以下字段：\n");
-        sb.append("   - sql_template: SQL模板字符串\n");
-        sb.append("   - parameters: 参数定义数组\n");
-        sb.append("   - intent: 查询意图\n");
-        sb.append("   - entity: 主要实体\n");
-        sb.append("   - example_question: 示例问题\n");
-        sb.append("   - skeleton: 查询骨架\n");
+        sb.append("   - generated_sql: 生成的SQL语句\n");
+        sb.append("   - question: 示例问题\n");
         sb.append("\n请用```json```代码块包裹你的响应。");
 
         return sb.toString();
@@ -282,14 +274,9 @@ public class BFSTableDiscoveryService {
             // JsonNode root = objectMapper.readTree(jsonBlock);
 
             QueryTemplate template = new QueryTemplate();
-            // template.setSqlTemplate(root.get("sql_template").asText());
-            // template.setParameters(root.get("parameters").toString());
-            // template.setIntent(root.get("intent").asText());
-            // template.setEntity(root.get("entity").asText());
-            // template.setExampleQuestion(root.get("example_question").asText());
-            // template.setSkeleton(root.get("skeleton").asText());
+            // template.setGeneratedSql(root.get("sql_template").asText());
+            // template.setQuestion(root.get("example_question").asText());
             template.setScore(new java.math.BigDecimal("0.0"));
-            template.setRatingCount(0);
             template.setUsageCount(0);
 
             return template;

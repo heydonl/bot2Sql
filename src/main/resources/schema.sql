@@ -208,25 +208,17 @@ CREATE TABLE workspace (
 -- 12. SQL 查询模板表
 CREATE TABLE IF NOT EXISTS query_template (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
-    skeleton VARCHAR(1000) NOT NULL COMMENT '骨架字符串（精确匹配key）',
-    sql_template TEXT NOT NULL COMMENT 'SQL模板（带占位符）',
-    entity VARCHAR(100) COMMENT '实体类型',
-    intent VARCHAR(50) NOT NULL COMMENT '意图类型',
-    supported_dimensions JSON COMMENT '支持的维度字段列表',
-    supported_metrics JSON COMMENT '支持的指标列表',
-    parameters JSON COMMENT '参数定义列表',
-    example_question VARCHAR(500) COMMENT '示例问题',
-    example_intent_json TEXT COMMENT '示例意图JSON',
-    score DECIMAL(3,2) DEFAULT 0.00 COMMENT '平均评分（0-5）',
-    rating_count INT DEFAULT 0 COMMENT '评分次数',
+    question VARCHAR(500) NOT NULL COMMENT '用户问题',
+    generated_sql TEXT NOT NULL COMMENT '生成的SQL',
+    datasource_id BIGINT COMMENT '数据源ID',
+    score DECIMAL(3,2) DEFAULT 1.00 COMMENT '模板评分（0-1）',
     usage_count INT DEFAULT 0 COMMENT '使用次数',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    UNIQUE KEY uk_skeleton (skeleton(255)),
-    INDEX idx_intent (intent),
-    INDEX idx_entity (entity),
-    INDEX idx_score (score DESC)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='SQL查询模板';
+    UNIQUE KEY uk_question_sql (question(255), generated_sql(255)),
+    INDEX idx_score (score DESC),
+    INDEX idx_datasource (datasource_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统模板表';
 
 -- 13. 模板评分记录表
 CREATE TABLE IF NOT EXISTS template_rating (
@@ -241,24 +233,7 @@ CREATE TABLE IF NOT EXISTS template_rating (
     INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模板评分记录';
 
--- 14. 意图分类 Few-shot 示例表
-CREATE TABLE IF NOT EXISTS intent_few_shot (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
-    intent VARCHAR(50) NOT NULL COMMENT '目标意图类型',
-    question VARCHAR(500) NOT NULL COMMENT '示例问题',
-    intent_json TEXT NOT NULL COMMENT '正确的意图JSON',
-    skeleton VARCHAR(1000) COMMENT '骨架字符串',
-    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
-    datasource_id BIGINT COMMENT '关联数据源',
-    created_by BIGINT COMMENT '创建人',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    INDEX idx_intent (intent),
-    INDEX idx_active (is_active),
-    INDEX idx_datasource (datasource_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='意图分类Few-shot示例';
-
--- 15. 查询日志表
+-- 14. 查询日志表
 CREATE TABLE IF NOT EXISTS query_log (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
     user_id BIGINT NOT NULL COMMENT '用户ID',
