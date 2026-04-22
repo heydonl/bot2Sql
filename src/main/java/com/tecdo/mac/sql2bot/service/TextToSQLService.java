@@ -791,6 +791,13 @@ public class TextToSQLService {
             for (com.tecdo.mac.sql2bot.domain.Model m : models) {
                 systemPrompt.append("### ").append(m.getTableName());
                 if (m.getDisplayName() != null) systemPrompt.append(" (").append(m.getDisplayName()).append(")");
+                // 写出所属数据库名，方便 LLM 知道表归属
+                if (m.getDatabaseId() != null) {
+                    com.tecdo.mac.sql2bot.domain.Database db = databaseService.getById(m.getDatabaseId());
+                    if (db != null && db.getDatabaseName() != null) {
+                        systemPrompt.append(" [数据库: ").append(db.getDatabaseName()).append("]");
+                    }
+                }
                 systemPrompt.append(" (datasource_id: ").append(m.getDatasourceId()).append(")\n");
                 if (m.getDescription() != null) systemPrompt.append("描述: ").append(m.getDescription()).append("\n");
                 systemPrompt.append("字段:\n");

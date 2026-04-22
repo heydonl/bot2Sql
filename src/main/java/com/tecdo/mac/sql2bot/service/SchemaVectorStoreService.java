@@ -183,7 +183,7 @@ public class SchemaVectorStoreService {
             Query q = new Query(queryStr)
                     .addParam("BLOB", queryVector)
                     .returnFields(META_FIELD, "score")
-                    .setSortBy("score", true)
+                    .setSortBy("score", true)  // true = 升序排序，让cosine distance小的（相似度高的）排在前面
                     .dialect(2);
 
             SearchResult result = jedisPooled.ftSearch(INDEX_NAME, q);
@@ -205,6 +205,7 @@ public class SchemaVectorStoreService {
                         log.debug("命中表: tableName={}, similarity={}", meta != null ? meta.getTableName() : "null", similarity);
                         return new SchemaSearchResult(meta, similarity);
                     })
+                    .sorted((a, b) -> Double.compare(b.getScore(), a.getScore())) // 按相似度分数倒序排序
                     .collect(Collectors.toList());
 
             if (results.isEmpty()) {
